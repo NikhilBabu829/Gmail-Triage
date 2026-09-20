@@ -62,7 +62,8 @@ def send_mail(service, to, subject, body):
     return service.users().messages().send(userId="me", body={"raw": raw}).execute()
 
 #this function takes a service, gives out an array that has each message with msg_id, thread_id, sender, subject and body of the message
-def list_messages(service, n=5):
+def list_messages(service):
+    con.log("Inside of getting the messages")
     result = service.users().messages().list(userId="me",q="newer_than:1d").execute()
     message_context = []
     short_message = []
@@ -99,13 +100,24 @@ def list_messages(service, n=5):
             "subject" : subject,
             "sinppet" : snippet,
         })
+    con.log("Got all the short and long content, \n returning them to the original function")
+    con.log("Writing both the short and long content to .json file")
+    with open("short.json", "w") as f:
+        json.dump(short_message, f, indent=4)
+    with open("long_content.json", "w") as f:
+            json.dump(message_context, f, indent=4)
         # print(content)
         # print(headers.get("From"), "|", headers.get("Subject"))
     return message_context, short_message
 
 def labels(service):
+    con.log("We are now going to retrieve the custom labels")
     all_labels = service.users().labels().list(userId="me").execute()
     only_user_labels = [label for label in all_labels["labels"] if label["type"] == "user"]
+    con.log("Retrieved labels")
+    con.log("Writing Custom lables to a file")
+    with open("custom_lables.json", "w") as f:
+        json.dump(only_user_labels, f, indent=4)
     return only_user_labels
 
 def chunk_list(items, chunk_size=15):
@@ -113,8 +125,37 @@ def chunk_list(items, chunk_size=15):
     for i in range(0, len(items), chunk_size):
         yield items[i : i + chunk_size]
 
+def call_ai(system_prompt, lables = None, content = None):
+    con.log("Calling the ai")
+    all_results = []
+    # Process in batches of 15
+    target_list = lables if lables is not None else (content or [])
+    print(target_list)
+    for batch in chunk_list(target_list, chunk_size=15):
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Triage these emails:\n{json.dumps(batch)}",
+                }
+            ],
+        )
+        if response.stop_reason == "max_tokens":
+            print("Warning: Batch truncated! Try reducing chunk_size.")
+
+        clean_json = re.sub(
+            r"^```(?:json)?\s*|\s*```$", "", response.content[0].text.strip()
+        )
+        batch_results = json.loads(clean_json)
+        all_results.extend(batch_results)
+    con.log("The results are in!, returning to the function")
+    return all_results
+
 def communicate_ai(labels, content):
-    print("This is from ai comm channel")
+    con.log("This is from ai comms channel")
     formatted_labels = "\n".join(
         f"- {label.get('id', label)}: {label.get('name', '')}"
         if isinstance(label, dict)
@@ -138,46 +179,28 @@ JSON Array Schema:
     "sender": "string"
   }}
 ]"""
-    all_results = []
-
-    # Process in batches of 15
-    for batch in chunk_list(content, chunk_size=15):
-        response = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=2048,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Triage these emails:\n{json.dumps(batch)}",
-                }
-            ],
-        )
-        if response.stop_reason == "max_tokens":
-            print("Warning: Batch truncated! Try reducing chunk_size.")
-
-        clean_json = re.sub(
-            r"^```(?:json)?\s*|\s*```$", "", response.content[0].text.strip()
-        )
-        batch_results = json.loads(clean_json)
-        all_results.extend(batch_results)
-    print(all_results)
-    return all_results
+    con.log("sending args to the call_ai")
+    results = call_ai(system_prompt=system_prompt, content=content)
+    con.log("retrieved results from ai, \n now returning them")
+    return results
 
 def attach_labels(labels, content, service):
+    con.log("We are now trying to attach custom lables to the mails")
     if(not labels):
         return {"message" : "The lables list is empty"}
     if(not content):
         return {"message" : "The content list is empty"}
-    # results = communicate_ai(labels, content)
-    with open("another_response.json", "r") as f:
-        response = json.load(f)
-    for result in response:
+    con.log("contacting the comm channel to get the appropriate tags")
+    results = communicate_ai(labels, content)
+    con.log("Recived the tags")
+    con.log("Now starting to apply the tags to respective emails")
+    for result in results:
         msg_id = result["message_id"]
         label_id = result["label_id"]
         try:
             body = {
-                "removeLabelIds": [label_id],
+                "addLabelIds": [label_id],
+                # "removeLabelIds": [label_id],
             }
 
             service.users().messages().modify(
@@ -190,6 +213,7 @@ def attach_labels(labels, content, service):
             print(f"Failed to label message {msg_id}: {error}")
 
 def generate_summary(content = ""):
+    con.log("trying to generate the summary for different emails")
     if(not content):
         return {"message" : "The content list is empty"}
 
@@ -218,47 +242,25 @@ Summarization Guidelines:
 - If sender cannot be determined, set it to "Unknown Sender".
 - Do not hallucinate or assume facts not present in the email text.
 """
-
-    all_results = []
-    
-    # Process in batches of 15
-    for batch in chunk_list(content, chunk_size=15):
-        response = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=2048,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Generate me summary for these emails:\n{json.dumps(batch)}",
-                }
-            ],
-        )
-        if response.stop_reason == "max_tokens":
-            print("Warning: Batch truncated! Try reducing chunk_size.")
-
-        clean_json = re.sub(
-            r"^```(?:json)?\s*|\s*```$", "", response.content[0].text.strip()
-        )
-        batch_results = json.loads(clean_json)
-        all_results.extend(batch_results)
+    con.log("Sending a request to the ai to get the summary for each email")
+    all_results = call_ai(system_prompt=system_prompt, content=content)
+    con.log("Got the summary for each email")
     with open("summary.json", "w") as f:
         json.dump(all_results, f, indent=4)
+    con.log("Sending the sumarry back to the original funciton")
     print(all_results)
     return all_results
 
 if __name__ == "__main__":
     service = build("gmail", "v1", credentials=get_credentials())
     # send_mail(service, "nikhilbabu829@gmail.com", "Hello", "sent using the api")
-    # messages, short_messages = list_messages(service)
-    # user_labels = labels(service=service)
-    # with open("data.json", "w") as f:
-    #     json.dump(short_messages, f, indent=4)
-    with open("data.json", "r") as f:
+    messages, short_messages = list_messages(service)
+    with open("short.json", "r") as f:
         short_messages = json.load(f)
-    with open("labels.json", "r") as f:
-        user_labels = json.load(f)
-    # results = attach_labels(user_labels, short_messages, service)
     with open("long_content.json", "r") as f:
-            content = json.load(f)
-    response = generate_summary(content)
+            full_content = json.load(f)
+    user_labels = labels(service=service)
+    with open("custom_lables.json", "r") as f:
+        custom_labels = json.load(f)
+    results = attach_labels(user_labels, short_messages, service)
+    response = generate_summary(full_content)
