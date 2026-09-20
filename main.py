@@ -22,8 +22,6 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-import datetime
-
 from pydantic import BaseModel
 
 load_dotenv()
@@ -155,7 +153,6 @@ JSON Array Schema:
                 }
             ],
         )
-
         if response.stop_reason == "max_tokens":
             print("Warning: Batch truncated! Try reducing chunk_size.")
 
@@ -178,10 +175,9 @@ def attach_labels(labels, content, service):
     for result in response:
         msg_id = result["message_id"]
         label_id = result["label_id"]
-
         try:
             body = {
-                "addLabelIds": [label_id],
+                "removeLabelIds": [label_id],
             }
 
             service.users().messages().modify(
@@ -192,7 +188,64 @@ def attach_labels(labels, content, service):
 
         except HttpError as error:
             print(f"Failed to label message {msg_id}: {error}")
+
+def generate_summary(content = ""):
+    if(not content):
+        return {"message" : "The content list is empty"}
+
+    system_prompt="""
+You are an expert executive assistant specializing in email triage. Your task is to process incoming emails, extract key metadata, and generate concise, actionable summaries.
+
+Output Constraints:
+- Return strictly valid JSON. Do not include introductory text, explanations, or conversational filler.
+- If processing a single email, return a single JSON object. If processing multiple emails, return a JSON array of objects.
+- Ensure all string values are valid and properly escaped.
+
+JSON Schema:
+{
+  "message_id": "<string: exact message identifier provided in input>",
+  "sender": "<string: sender's name and/or email address>",
+  "summary": "<string: concise, high-signal summary>"
+}
+
+Summarization Guidelines:
+- Highlight primary intent, specific asks, decisions, deadlines, and required actions.
+- Remove all conversational fluff, pleasantries, greetings, signatures, and legal disclaimers.
+- Keep summaries strictly within 1 to 3 informative, objective sentences.
+- Preserve key numbers, monetary figures, dates, times, and project names.
+- For transactional or automated emails (receipts, password resets, 2FA codes), state the core action or code in one sentence.
+- If message_id cannot be found in the input, set it to "unknown".
+- If sender cannot be determined, set it to "Unknown Sender".
+- Do not hallucinate or assume facts not present in the email text.
+"""
+
+    all_results = []
     
+    # Process in batches of 15
+    for batch in chunk_list(content, chunk_size=15):
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Generate me summary for these emails:\n{json.dumps(batch)}",
+                }
+            ],
+        )
+        if response.stop_reason == "max_tokens":
+            print("Warning: Batch truncated! Try reducing chunk_size.")
+
+        clean_json = re.sub(
+            r"^```(?:json)?\s*|\s*```$", "", response.content[0].text.strip()
+        )
+        batch_results = json.loads(clean_json)
+        all_results.extend(batch_results)
+    with open("summary.json", "w") as f:
+        json.dump(all_results, f, indent=4)
+    print(all_results)
+    return all_results
 
 if __name__ == "__main__":
     service = build("gmail", "v1", credentials=get_credentials())
@@ -205,4 +258,7 @@ if __name__ == "__main__":
         short_messages = json.load(f)
     with open("labels.json", "r") as f:
         user_labels = json.load(f)
-    results = attach_labels(user_labels, short_messages, service)
+    # results = attach_labels(user_labels, short_messages, service)
+    with open("long_content.json", "r") as f:
+            content = json.load(f)
+    response = generate_summary(content)
