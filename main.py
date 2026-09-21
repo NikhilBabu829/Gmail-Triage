@@ -1,3 +1,7 @@
+#TODO -  Create a frontend rag page
+#TODO - the rag page should be about the summary we received as a response from the model
+#TODO - add multimodal capabilities, where the uesr can ask question using voice, and also get the response back in actual voice
+
 import os
 import base64
 from email.message import EmailMessage
@@ -108,14 +112,20 @@ def list_messages(service):
             json.dump(message_context, f, indent=4)
         # print(content)
         # print(headers.get("From"), "|", headers.get("Subject"))
-    return message_context, short_message
+    return message_context
 
 def labels(service):
     con.log("We are now going to retrieve the custom labels")
     all_labels = service.users().labels().list(userId="me").execute()
-    only_user_labels = [label for label in all_labels["labels"] if label["type"] == "user"]
+    
+    # Filter for user labels, ignoring IMAP system artifacts
+    only_user_labels = [
+        label for label in all_labels.get("labels", [])
+        if label.get("type") == "user" and not label.get("name", "").startswith("[Imap]")
+    ]
+
     con.log("Retrieved labels")
-    con.log("Writing Custom lables to a file")
+    con.log("Writing Custom labels to a file")
     with open("custom_lables.json", "w") as f:
         json.dump(only_user_labels, f, indent=4)
     return only_user_labels
@@ -251,16 +261,172 @@ Summarization Guidelines:
     print(all_results)
     return all_results
 
+def agent(service, max_safety_turns=10):
+    tools = [
+        {
+            "name" : "list_messages",
+            "description" : "It retrieves all the mails for the past 24hrs",
+            "input_schema" : {
+                "type" : "object",
+                "properties" : {}
+            }
+        },
+        {
+            "name" : "labels",
+            "description" : "It retrieves all the custom labels a user might have",
+            "input_schema" : {
+                "type" : "object",
+                "properties" : {}
+            }
+        },
+        {
+            "name": "attach_labels",
+            "description": (
+                "Triages and attaches custom Gmail labels to a list of email messages "
+                "based on the allowed labels and email contents."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "labels": {
+                        "type": "array",
+                        "description": "The available custom user labels to choose from.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "The unique Gmail label ID (e.g., 'Label_123')."
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": "The human-readable label name (e.g., 'URGENT', 'Finance')."
+                                }
+                            },
+                            "required": ["id", "name"]
+                        }
+                    },
+                    "content": {
+                        "type": "array",
+                        "description": "List of emails with their metadata and body content to be triaged.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "message_id": {
+                                    "type": "string",
+                                    "description": "The unique Gmail message ID."
+                                },
+                                "thread_id": {
+                                    "type": "string",
+                                    "description": "The Gmail thread ID."
+                                },
+                                "sender": {
+                                    "type": "string",
+                                    "description": "Sender email and name."
+                                },
+                                "subject": {
+                                    "type": "string",
+                                    "description": "Subject of the email."
+                                },
+                                "snippet": {
+                                    "type": "string",
+                                    "description": "Short snippet/preview of the email."
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "Full text body of the email message."
+                                }
+                            },
+                            "required": ["message_id", "subject"]
+                        }
+                    }
+                },
+                "required": ["labels", "content"]
+            }
+        },
+        {
+            "name" : "generate_summary",
+            "description" : "It Generates summary of the entire emails for the past 24hrs",
+            "input_schema" : {
+                "type" : "object",
+                "properties" : {}
+            }
+        }
+    ]
+    messages = [
+        {
+            "role": "user", 
+            "content": "I need you to traige some emails, you can start by getting all the past 24 hour emails"
+        }
+    ]
+    count = 0
+    while True:
+        count+=1
+        if count > max_safety_turns:
+            print("[Warning: Reached maximum emergency safety turns]")
+            break
+        with client.messages.stream(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            tools=tools,
+            messages=messages,
+        ) as stream:
+            for event in stream:
+                if event.type == "content_block_delta":
+                # Streamed text tokens
+                    if event.delta.type == "text_delta":
+                        print(event.delta.text, end="", flush=True)
+                    # Streamed JSON arguments for tool calls
+                    elif event.delta.type == "input_json_delta":
+                        pass  # Accumulates partial JSON arguments
+            final_response = stream.get_final_message()
+        messages.append({"role": "assistant", "content": final_response.content})
+        if final_response.stop_reason != "tool_use":
+            print("\n[Triage complete]")
+            break
+        tool_results = []
+        if final_response.stop_reason == "tool_use":
+            tool_blocks = [b for b in final_response.content if b.type == "tool_use"]
+            for tool_call in tool_blocks:
+                if tool_call.name == "list_messages":
+                    output = list_messages(service=service)
+                elif tool_call.name == "labels":
+                    output = labels(service=service)
+                elif tool_call.name == "attach_labels":
+                    with open("long_content.json", "r") as f:
+                        content = json.load(f)
+                    with open("custom_lables.json", "r") as f:
+                        email_labels = json.load(f)
+                    output = attach_labels(email_labels, content=content, service=service)
+                elif tool_call.name == "generate_summary":
+                    with open("long_content.json", "r") as f:
+                        content = json.load(f)
+                    output = generate_summary(content=content)
+                else:
+                    output = {"error": f"Unknown tool: {tool_call.name}"}
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_call.id,
+                    "content": json.dumps(output or {"status": "success"})
+                })
+            messages.append({"role": "user", "content": tool_results})
+
+    return messages
+
+
 if __name__ == "__main__":
     service = build("gmail", "v1", credentials=get_credentials())
     # send_mail(service, "nikhilbabu829@gmail.com", "Hello", "sent using the api")
-    messages, short_messages = list_messages(service)
-    with open("short.json", "r") as f:
-        short_messages = json.load(f)
-    with open("long_content.json", "r") as f:
-            full_content = json.load(f)
-    user_labels = labels(service=service)
-    with open("custom_lables.json", "r") as f:
-        custom_labels = json.load(f)
-    results = attach_labels(user_labels, short_messages, service)
-    response = generate_summary(full_content)
+    # messages, short_messages = list_messages(service)
+    # with open("short.json", "r") as f:
+    #     short_messages = json.load(f)
+    # with open("long_content.json", "r") as f:
+    #         full_content = json.load(f)
+    # user_labels = labels(service=service)
+    # with open("custom_lables.json", "r") as f:
+    #     custom_labels = json.load(f)
+    # results = attach_labels(user_labels, short_messages, service)
+    # response = generate_summary(full_content)
+    answer = agent(service)
+    print(answer)
+
