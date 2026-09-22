@@ -1,28 +1,22 @@
-import { useCallback, useEffect, useRef } from 'react'
-import { Mic, SendHorizontal, Sparkles, Square } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { SendHorizontal, Sparkles, Square } from 'lucide-react'
 import { ChatMessageBubble } from './ChatMessageBubble'
 import { Button } from './ui'
-import { useSpeechRecognition } from '@/hooks/useSpeechRecognition'
-import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/lib/types'
 
 export interface ChatPanelHandle {
   focusInput: () => void
   setInput: (text: string) => void
-  /** Whether the mic is currently live, so the dashboard can stay quiet while dictating. */
-  isListening: () => boolean
 }
 
 interface Props {
   messages: ChatMessage[]
   sending: boolean
   input: string
-  /** A state setter, so voice transcripts can append to whatever is already typed. */
   onInputChange: React.Dispatch<React.SetStateAction<string>>
   onSend: (prompt: string) => void
   /** Aborts an in-flight answer stream. */
   onStop: () => void
-  onError: (message: string) => void
   speakingId: string | null
   ttsSupported: boolean
   onToggleSpeech: (message: ChatMessage) => void
@@ -43,7 +37,6 @@ export function ChatPanel({
   onInputChange,
   onSend,
   onStop,
-  onError,
   speakingId,
   ttsSupported,
   onToggleSpeech,
@@ -52,35 +45,10 @@ export function ChatPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const streamRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
-  /** Mirrors `listening` so the imperative handle always reads the current value. */
-  const listeningRef = useRef(false)
-
-  const appendTranscript = useCallback(
-    (text: string) => {
-      onInputChange((current) => (current ? `${current.trimEnd()} ${text}` : text))
-    },
-    [onInputChange],
-  )
-
-  const {
-    unsupportedReason: sttUnsupportedReason,
-    phase: voicePhase,
-    listening,
-    interim,
-    toggle: toggleMic,
-  } = useSpeechRecognition({
-    onTranscript: appendTranscript,
-    onError,
-  })
-
-  useEffect(() => {
-    listeningRef.current = listening
-  }, [listening])
 
   // Expose focus/prefill to the dashboard so a triage card can seed the prompt.
   useEffect(() => {
     registerHandle({
-      isListening: () => listeningRef.current,
       focusInput: () => textareaRef.current?.focus(),
       setInput: (text) => {
         onInputChange(text)
@@ -101,7 +69,7 @@ export function ChatPanel({
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 168)}px`
-  }, [input, interim])
+  }, [input])
 
   // Follow new tokens, but stop following once the user scrolls up to read back.
   useEffect(() => {
@@ -148,7 +116,7 @@ export function ChatPanel({
             <div>
               <p className="text-sm font-medium">Ask about your inbox</p>
               <p className="mx-auto mt-1 max-w-xs text-xs text-muted">
-                Question your triaged email by typing, or dictate with the mic.
+                Ask a question about your triaged email, or pick one of these.
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-1.5">
@@ -181,51 +149,7 @@ export function ChatPanel({
       </div>
 
       <div className="shrink-0 border-t border-line bg-panel/40 px-4 py-3 md:px-5">
-        {listening && (
-          <div
-            role="status"
-            className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-200"
-          >
-            <span className="animate-rec size-2 shrink-0 rounded-full bg-red-500" aria-hidden="true" />
-            <span className="shrink-0 font-medium">
-              {voicePhase === 'starting' ? 'Starting…' : 'Listening…'}
-            </span>
-            <span className="truncate text-red-200/70">
-              {voicePhase === 'starting'
-                ? 'Waiting for the microphone — allow access if your browser asks.'
-                : interim
-                  ? `“${interim}”`
-                  : 'Speak now — tap the square to finish.'}
-            </span>
-          </div>
-        )}
-
-        <div
-          className={cn(
-            'flex items-end gap-1.5 rounded-xl border bg-panel px-1.5 py-1.5',
-            listening
-              ? 'border-red-500/50 ring-2 ring-red-500/25'
-              : 'border-line focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/20',
-          )}
-        >
-          {/* Never disabled: an unsupported browser explains itself on click. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleMic}
-            title={
-              sttUnsupportedReason ?? (listening ? 'Stop recording' : 'Dictate a question')
-            }
-            aria-label={listening ? 'Stop recording' : 'Start voice input'}
-            aria-pressed={listening}
-            className={cn(
-              listening && 'animate-rec bg-red-500/20 text-red-300 hover:bg-red-500/25',
-              sttUnsupportedReason && 'opacity-60',
-            )}
-          >
-            {listening ? <Square className="size-3.5 fill-current" /> : <Mic className="size-4" />}
-          </Button>
-
+        <div className="flex items-end gap-1.5 rounded-xl border border-line bg-panel px-1.5 py-1.5 focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/20">
           <textarea
             ref={textareaRef}
             rows={1}
@@ -234,7 +158,7 @@ export function ChatPanel({
             onKeyDown={onKeyDown}
             placeholder="Ask about your inbox…"
             aria-label="Message the assistant"
-            className="max-h-42 min-h-9 flex-1 resize-none bg-transparent py-1.5 text-sm leading-relaxed text-ink outline-none placeholder:text-muted"
+            className="max-h-42 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-relaxed text-ink outline-none placeholder:text-muted"
           />
 
           {sending ? (

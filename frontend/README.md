@@ -47,69 +47,24 @@ reloads the page with the new data. A production `npm run build` inlines whateve
 held at build time. If it is absent or malformed the feed starts empty and shows the
 "Run First Triage" state; the build still succeeds.
 
-### Voice is entirely client-side
+### Voice output (text-to-speech)
 
-Both directions run in the browser. The backend is not involved and needs no audio handling:
-it only ever sees the `prompt` text field, whether that text was typed or dictated.
+Answers can be read aloud with `window.speechSynthesis` (`src/hooks/useSpeech.ts`). This is
+fully local to the browser and works everywhere, including Opera GX.
 
-| Direction | API | Where |
-| --- | --- | --- |
-| Speech → text | `SpeechRecognition` / `webkitSpeechRecognition` | `src/hooks/useSpeechRecognition.ts` |
-| Text → speech | `window.speechSynthesis` | `src/hooks/useSpeech.ts` |
+- **Auto-Read** in the top bar speaks every assistant reply automatically, and persists in
+  `localStorage`.
+- Each answer has its own **Listen / Stop** control, and a global Stop appears in the top bar
+  while speech is playing.
+- Playback waits for the completed answer, since `speechSynthesis` cannot consume a stream.
+- Markdown is stripped first (`stripMarkdown` in `src/lib/utils.ts`) so asterisks, backticks,
+  table pipes and link syntax are not read aloud.
 
-Dictation is continuous with interim results: finalised phrases are appended to whatever is
-already in the textarea, so you can mix typing and talking, and the interim text shows in the
-red "Listening…" banner while you speak.
-
-Two things the naive implementation gets wrong, both handled here:
-
-- **Permission.** `SpeechRecognition.start()` does not reliably raise the browser's mic
-  prompt. `start()` therefore calls `navigator.mediaDevices.getUserMedia({ audio: true })`
-  first, which guarantees the prompt and — because the stream is held open for the duration —
-  makes the browser show its own "microphone in use" indicator. The stream's tracks are
-  stopped when dictation ends, so the mic is never left open.
-- **Silence timeouts.** Chrome ends a recognition session after a few seconds of silence even
-  with `continuous = true`, so pausing before you speak used to kill dictation with no sign.
-  A `wantListening` ref records user intent, and `onend` starts a fresh session whenever the
-  engine quits on its own. `no-speech` and `aborted` are treated as routine rather than fatal.
-  A runaway guard (40 restarts/minute) switches dictation off with a toast instead of spinning.
-
-The mic button is never silently disabled. Where dictation cannot run, clicking it explains
-why — an insecure origin (opening the app over a LAN IP rather than `localhost`/HTTPS disables
-the microphone APIs entirely), a browser without the Speech API (Firefox), a blocked
-permission, or a missing input device.
-
-### Browser support for dictation
-
-**Dictation needs Chrome, Edge or Safari.** Feature detection is not enough to tell you this:
-several Chromium forks — Opera and Opera GX, Brave, Arc — expose `webkitSpeechRecognition`
-but ship no transcription backend. Every detect passes, the button enables, `start()` is
-accepted, and the engine then emits *nothing at all*: no `start`, no `audiostart`, no
-`error`, forever. caniuse lists the Speech Recognition API as unsupported in Opera outright.
-
-Since no event marks that failure, a timer is the only way to catch it. `spawnSession` arms a
-watchdog (`ENGINE_START_TIMEOUT_MS`, 4s) after `start()`; every lifecycle event clears it. If
-it elapses, the session is aborted and the user is told why, distinguishing two cases:
-
-- no `start` at all → the engine never came up; the browser has no speech backend.
-- `start` but no `audiostart` → the engine never got the mic; another app or tab holds it.
-
-Consequently the UI only claims to be **Listening…** once `audiostart` or `result` proves the
-engine is really running. Until then it shows **Starting…**. Claiming otherwise is what
-previously made a permanently dead session look alive.
-
-Text-to-speech is unaffected by all of this — `speechSynthesis` is fully local and works
-everywhere, Opera GX included.
-
-Playback reads the completed answer — `speechSynthesis` cannot consume a stream, so TTS waits
-for the `done` frame rather than speaking each token. Markdown is stripped before speaking
-(`stripMarkdown` in `src/lib/utils.ts`) so asterisks, backticks, table pipes and link syntax
-aren't read aloud. "Auto-Read" in the top bar speaks every reply automatically and persists in
-`localStorage`; each answer also has its own Listen/Stop control, and a global Stop appears in
-the top bar while speech is playing.
-
-No audio ever leaves the browser, so if you later want server-side STT/TTS (Whisper, a
-neural voice) that would replace these hooks — nothing else in the app would change.
+There is no voice **input**. Dictation was removed: it depends on the Web Speech
+`SpeechRecognition` API, which several Chromium browsers (Opera and Opera GX, Brave, Arc)
+expose without any transcription backend — `start()` is accepted and no event ever fires, so
+it could not be made to work client-side. Adding it back would mean recording with
+`MediaRecorder` and transcribing server-side.
 
 ### Streaming the answer
 
@@ -132,19 +87,16 @@ reading `{ answer, sources }` in one piece, so both shapes work.
 A stream that closes without emitting any token (the "no relevant emails" path returns early
 before yielding) renders an explanatory message rather than an empty bubble.
 
-> **Backend gaps as of this commit.** `rag(query: str)` in `main.py` declares `query` as a
-> *URL query-string* parameter, so the multipart body is never read and every request from
-> this client is rejected with `422 {"loc":["query","query"],"msg":"Field required"}`. The
-> body then calls `query.prompt` on that string, which raises `AttributeError` if the
-> parameter is supplied. To match this client the handler needs `prompt: str = Form(...)`.
-> `query_rag` also builds a `sources` list it never yields, and now calls `index_emails()` on
-> every request, which re-embeds the whole corpus per query.
+> **Backend note.** `rag()` in `main.py` now reads `prompt: str = Form(...)`, which matches
+> what this client sends. Two things still limit it: `query_rag` builds a `sources` list it
+> never yields (so the "Referenced Emails" accordion stays hidden until it does), and it calls
+> `index_emails()` on every request, re-embedding the whole corpus per query.
 
 ## Layout
 
 - `src/lib/api.ts` — the only place that talks to the backend.
 - `src/lib/utils.ts` — `parseSender`, metric computation, search filter, markdown-to-speech stripping.
-- `src/hooks/` — toasts, `SpeechRecognition` (STT), `speechSynthesis` (TTS).
+- `src/hooks/` — toasts and `speechSynthesis` playback (`useSpeech`).
 - `src/components/` — `TopBar`, `TriageFeed` (+ `EmailCard`, `MetricCard`), `ChatPanel`
   (+ `ChatMessageBubble`, `SourcesAccordion`), `Toaster`, `ui.tsx` primitives.
 
@@ -152,7 +104,5 @@ before yielding) renders an explanatory message rather than an empty bubble.
 
 - Metrics (total / unique senders / financial) are computed client-side from the summary array;
   "financial" matches `invoice`, `receipt`, `bill`, `payment`, `subscription` or a currency symbol.
-- Voice input uses `webkitSpeechRecognition`/`SpeechRecognition` — see "Voice is entirely
-  client-side" above for permission handling and browser support.
 - The Auto-Read toggle persists in `localStorage`.
 - On narrow screens the two panels become tabs; "Ask Copilot" switches to the chat tab.
