@@ -19,10 +19,33 @@ npm run dev            # http://localhost:5173
 | Endpoint | Method | Body | Response |
 | --- | --- | --- | --- |
 | `/api/triage/run` | POST | `{}` | `{ status: "running" \| "completed", message: string }` |
-| `/api/triage/summary` | GET | — | `[{ message_id, sender, summary }]` |
+| `/api/triage/summary` | GET | — | `[{ message_id, sender, summary }]` (not called on load — see below) |
 | `/api/rag/multimodal-query` | POST | `multipart/form-data` with `prompt` (string) and optional `image` (file) | `text/event-stream` (see below) |
 
 CORS must allow the dev origin (`http://localhost:5173`).
+
+### Where the feed's data comes from
+
+The dashboard does **not** call the API on load. `GET /api/triage/summary` re-runs
+`generate_summary` on every request, so loading the page used to trigger a fresh
+summarisation pass. Instead, the `local-triage-summary` plugin in `vite.config.ts` reads the
+`summary.json` the backend wrote and inlines it as the virtual module
+`virtual:triage-summary`, which seeds the feed's initial state. First paint is therefore
+instant, works with the backend stopped, and costs nothing.
+
+The summary changes only on an explicit action:
+
+| Action | What happens |
+| --- | --- |
+| Page load | reads `summary.json` from disk; **no** request |
+| **Run Triage Now** | `POST /api/triage/run`, then `GET /api/triage/summary` to show the new result |
+| Refresh icon | `GET /api/triage/summary` only, for pulling the latest by hand |
+
+The plugin looks for `../summary.json` (the repo root, next to `main.py`) and then
+`./summary.json`. In dev it watches that file, so re-running triage — which rewrites it —
+reloads the page with the new data. A production `npm run build` inlines whatever the file
+held at build time. If it is absent or malformed the feed starts empty and shows the
+"Run First Triage" state; the build still succeeds.
 
 ### Streaming the answer
 

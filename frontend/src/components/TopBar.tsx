@@ -73,8 +73,8 @@ export function TopBar({
             size="icon"
             onClick={onRefresh}
             disabled={refreshing || running}
-            title="Refresh summary"
-            aria-label="Refresh summary"
+            title="Fetch the latest summary from the API"
+            aria-label="Fetch the latest summary from the API"
           >
             <RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />
           </Button>
