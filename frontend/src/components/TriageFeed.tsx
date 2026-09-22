@@ -8,7 +8,6 @@ import type { TriagedEmail } from '@/lib/types'
 
 interface Props {
   emails: TriagedEmail[]
-  loading: boolean
   running: boolean
   error: string | null
   query: string
@@ -19,7 +18,6 @@ interface Props {
 
 export function TriageFeed({
   emails,
-  loading,
   running,
   error,
   query,
@@ -29,7 +27,7 @@ export function TriageFeed({
 }: Props) {
   const metrics = useMemo(() => computeMetrics(emails), [emails])
   const visible = useMemo(() => filterEmails(emails, query), [emails, query])
-  const isEmpty = !loading && emails.length === 0
+  const isEmpty = emails.length === 0
 
   return (
     <section className="flex h-full min-h-0 flex-col" aria-label="Daily triage feed">
@@ -76,14 +74,7 @@ export function TriageFeed({
       </div>
 
       <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-4 pt-3 pb-4 md:px-5">
-        {loading && (
-          <div className="flex flex-col items-center gap-2 py-14 text-muted">
-            <Spinner className="size-5" />
-            <p className="text-sm">Loading triage summary…</p>
-          </div>
-        )}
-
-        {!loading && error && emails.length === 0 && (
+        {error && emails.length === 0 && (
           <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-8 text-center">
             <p className="text-sm font-medium text-red-200">Couldn’t load the triage summary</p>
             <p className="mx-auto mt-1 max-w-sm text-xs text-muted">{error}</p>
@@ -108,7 +99,7 @@ export function TriageFeed({
           </div>
         )}
 
-        {!loading && emails.length > 0 && visible.length === 0 && (
+        {emails.length > 0 && visible.length === 0 && (
           <div className="rounded-xl border border-dashed border-line px-4 py-12 text-center">
             <p className="text-sm font-medium">No matches</p>
             <p className="mt-1 text-xs text-muted">

@@ -8,6 +8,7 @@ import { useSpeech } from '@/hooks/useSpeech'
 import { ApiError, fetchSummary, isAbort, runTriage, streamMultimodalQuery } from '@/lib/api'
 import { senderName, truncate } from '@/lib/utils'
 import type { ChatMessage, TriagedEmail } from '@/lib/types'
+import localSummary from 'virtual:triage-summary'
 
 const AUTO_READ_KEY = 'gmail-triage:auto-read'
 
@@ -16,8 +17,9 @@ function newId() {
 }
 
 export default function App() {
-  const [emails, setEmails] = useState<TriagedEmail[]>([])
-  const [loading, setLoading] = useState(true)
+  // Seeded from the summary.json the backend wrote — no request on load, because
+  // GET /api/triage/summary re-runs summarisation. Only a triage run refreshes it.
+  const [emails, setEmails] = useState<TriagedEmail[]>(() => [...localSummary])
   const [refreshing, setRefreshing] = useState(false)
   const [running, setRunning] = useState(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
@@ -53,10 +55,10 @@ export default function App() {
     }
   }, [autoRead])
 
+  /** Pulls the live summary from the API. Only ever called on an explicit user action. */
   const loadSummary = useCallback(
-    async (mode: 'initial' | 'refresh' = 'refresh', signal?: AbortSignal) => {
-      // `loading` already starts true, so the initial load has nothing to flip on.
-      if (mode === 'refresh') setRefreshing(true)
+    async (signal?: AbortSignal) => {
+      setRefreshing(true)
       try {
         const data = await fetchSummary(signal)
         setEmails(data)
@@ -69,24 +71,17 @@ export default function App() {
         push('Backend unreachable', { description: message, variant: 'error' })
         return null
       } finally {
-        setLoading(false)
         setRefreshing(false)
       }
     },
     [push],
   )
 
-  useEffect(() => {
-    const controller = new AbortController()
-    void loadSummary('initial', controller.signal)
-    return () => controller.abort()
-  }, [loadSummary])
-
   const handleRunTriage = useCallback(async () => {
     setRunning(true)
     try {
       const result = await runTriage()
-      const data = await loadSummary('refresh')
+      const data = await loadSummary()
       push(result.status === 'completed' ? 'Triage complete' : 'Triage started', {
         description:
           result.message ||
@@ -228,7 +223,7 @@ export default function App() {
         autoRead={autoRead}
         onAutoReadChange={setAutoRead}
         onRunTriage={handleRunTriage}
-        onRefresh={() => void loadSummary('refresh')}
+        onRefresh={() => void loadSummary()}
         speaking={speech.speaking}
         onStopSpeech={speech.stop}
         ttsSupported={speech.supported}
@@ -240,7 +235,6 @@ export default function App() {
         <div className={mobileView === 'feed' ? 'min-h-0' : 'hidden min-h-0 md:block'}>
           <TriageFeed
               emails={emails}
-              loading={loading}
               running={running}
               error={summaryError}
               query={query}
