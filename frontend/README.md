@@ -58,10 +58,26 @@ it only ever sees the `prompt` text field, whether that text was typed or dictat
 | Text → speech | `window.speechSynthesis` | `src/hooks/useSpeech.ts` |
 
 Dictation is continuous with interim results: finalised phrases are appended to whatever is
-already in the textarea, so you can mix typing and talking, and the interim text is shown
-beside the pulsing red indicator while you speak. Recognition runs in Chrome/Edge and Safari;
-Firefox has no support, so the mic button is disabled there with an explanatory tooltip. A
-denied mic permission surfaces a toast rather than failing silently.
+already in the textarea, so you can mix typing and talking, and the interim text shows in the
+red "Listening…" banner while you speak.
+
+Two things the naive implementation gets wrong, both handled here:
+
+- **Permission.** `SpeechRecognition.start()` does not reliably raise the browser's mic
+  prompt. `start()` therefore calls `navigator.mediaDevices.getUserMedia({ audio: true })`
+  first, which guarantees the prompt and — because the stream is held open for the duration —
+  makes the browser show its own "microphone in use" indicator. The stream's tracks are
+  stopped when dictation ends, so the mic is never left open.
+- **Silence timeouts.** Chrome ends a recognition session after a few seconds of silence even
+  with `continuous = true`, so pausing before you speak used to kill dictation with no sign.
+  A `wantListening` ref records user intent, and `onend` starts a fresh session whenever the
+  engine quits on its own. `no-speech` and `aborted` are treated as routine rather than fatal.
+  A runaway guard (40 restarts/minute) switches dictation off with a toast instead of spinning.
+
+The mic button is never silently disabled. Where dictation cannot run, clicking it explains
+why — an insecure origin (opening the app over a LAN IP rather than `localhost`/HTTPS disables
+the microphone APIs entirely), a browser without the Speech API (Firefox), a blocked
+permission, a missing input device, or a browser that blocks the recognition service (Brave).
 
 Playback reads the completed answer — `speechSynthesis` cannot consume a stream, so TTS waits
 for the `done` frame rather than speaking each token. Markdown is stripped before speaking
@@ -114,7 +130,7 @@ before yielding) renders an explanatory message rather than an empty bubble.
 
 - Metrics (total / unique senders / financial) are computed client-side from the summary array;
   "financial" matches `invoice`, `receipt`, `bill`, `payment`, `subscription` or a currency symbol.
-- Voice input uses `webkitSpeechRecognition`/`SpeechRecognition` — Chrome and Safari only. The mic
-  button is disabled where unsupported, and blocked permissions raise a toast.
+- Voice input uses `webkitSpeechRecognition`/`SpeechRecognition` — see "Voice is entirely
+  client-side" above for permission handling and browser support.
 - The Auto-Read toggle persists in `localStorage`.
 - On narrow screens the two panels become tabs; "Ask Copilot" switches to the chat tab.
