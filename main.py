@@ -230,8 +230,8 @@ def attach_labels(labels, content, service):
         label_id = result["label_id"]
         try:
             body = {
-                # "addLabelIds": [label_id],
-                "removeLabelIds": [label_id],
+                "addLabelIds": [label_id],
+                # "removeLabelIds": [label_id],
             }
 
             service.users().messages().modify(
@@ -302,67 +302,10 @@ def agent(service, max_safety_turns=10):
         },
         {
             "name": "attach_labels",
-            "description": (
-                "Triages and attaches custom Gmail labels to a list of email messages "
-                "based on the allowed labels and email contents."
-            ),
+            "description": "Triages the fetched emails and attaches the user's custom Gmail labels to them.",
             "input_schema": {
                 "type": "object",
-                "properties": {
-                    "labels": {
-                        "type": "array",
-                        "description": "The available custom user labels to choose from.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {
-                                    "type": "string",
-                                    "description": "The unique Gmail label ID (e.g., 'Label_123')."
-                                },
-                                "name": {
-                                    "type": "string",
-                                    "description": "The human-readable label name (e.g., 'URGENT', 'Finance')."
-                                }
-                            },
-                            "required": ["id", "name"]
-                        }
-                    },
-                    "content": {
-                        "type": "array",
-                        "description": "List of emails with their metadata and body content to be triaged.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "message_id": {
-                                    "type": "string",
-                                    "description": "The unique Gmail message ID."
-                                },
-                                "thread_id": {
-                                    "type": "string",
-                                    "description": "The Gmail thread ID."
-                                },
-                                "sender": {
-                                    "type": "string",
-                                    "description": "Sender email and name."
-                                },
-                                "subject": {
-                                    "type": "string",
-                                    "description": "Subject of the email."
-                                },
-                                "snippet": {
-                                    "type": "string",
-                                    "description": "Short snippet/preview of the email."
-                                },
-                                "content": {
-                                    "type": "string",
-                                    "description": "Full text body of the email message."
-                                }
-                            },
-                            "required": ["message_id", "subject"]
-                        }
-                    }
-                },
-                "required": ["labels", "content"]
+                "properties": {}
             }
         },
         {
@@ -377,7 +320,14 @@ def agent(service, max_safety_turns=10):
     messages = [
         {
             "role": "user", 
-            "content": "I need you to traige some emails, you can start by getting all the past 24 hour emails"
+            "content": (
+                "Please triage my emails for the past 24 hours. "
+                "Follow these steps in order:\n"
+                "1. Call `list_messages` to retrieve recent emails.\n"
+                "2. Call `labels` to fetch available labels.\n"
+                "3. Call `attach_labels` to categorize and label the emails.\n"
+                "4. Call `generate_summary` to summarize them."
+            )
         }
     ]
     count = 0
@@ -387,7 +337,7 @@ def agent(service, max_safety_turns=10):
             print("[Warning: Reached maximum emergency safety turns]")
             break
         with client.messages.stream(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-5",
             max_tokens=4096,
             tools=tools,
             messages=messages,
@@ -434,26 +384,22 @@ def agent(service, max_safety_turns=10):
 
     return messages
 
-def insertion():
-    with open("long_content.json" "r") as f:
-        long_content = json.load(f)
-    
-
 if __name__ == "__main__":
     service = build("gmail", "v1", credentials=get_credentials())
     # send_mail(service, "nikhilbabu829@gmail.com", "Hello", "sent using the api")
-    # messages, short_messages = list_messages(service)
+    messages = list_messages(service)
+    print(messages)
     # with open("short.json", "r") as f:
     #     short_messages = json.load(f)
     # with open("long_content.json", "r") as f:
     #         full_content = json.load(f)
-    # user_labels = labels(service=service)
+    user_labels = labels(service=service)
     # with open("custom_lables.json", "r") as f:
     #     custom_labels = json.load(f)
-    # results = attach_labels(user_labels, short_messages, service)
+    results = attach_labels(user_labels, messages, service)
     # response = generate_summary(full_content)
-    answer = agent(service)
-    print(answer)
+    # answer = agent(service)
+    # print(answer)
 
 @app.post("/api/triage/run")
 def running_traige():
