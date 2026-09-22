@@ -73,8 +73,11 @@ const RESTART_DELAY_MS = 300
 /** Consecutive sessions that end without ever capturing audio before we give up loudly. */
 const MAX_DEAD_SESSIONS = 4
 
+export type VoicePhase = 'idle' | 'starting' | 'listening'
+
 export function useSpeechRecognition({ onTranscript, onError }: Options) {
-  const [listening, setListening] = useState(false)
+  /** `starting` covers the permission prompt, so the UI reacts on the very first click. */
+  const [phase, setPhase] = useState<VoicePhase>('idle')
   const [interim, setInterim] = useState('')
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
@@ -97,6 +100,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
   }, [onTranscript, onError])
 
   const stop = useCallback(() => {
+    trace('stop() called by the user')
     wantListeningRef.current = false
     if (restartTimerRef.current) {
       window.clearTimeout(restartTimerRef.current)
@@ -109,7 +113,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     } catch {
       /* already stopped */
     }
-    setListening(false)
+    setPhase('idle')
     setInterim('')
   }, [])
 
@@ -134,11 +138,11 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
       trace('audiostart — engine has the microphone')
       gotAudioRef.current = true
       deadSessionsRef.current = 0
-      setListening(true)
+      setPhase('listening')
     }
     recognition.onstart = () => {
       trace('start')
-      setListening(true)
+      setPhase('listening')
     }
 
     recognition.onresult = (event) => {
@@ -185,7 +189,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
 
       if (!wantListeningRef.current) {
         recognitionRef.current = null
-        setListening(false)
+        setPhase('idle')
         return
       }
 
@@ -196,7 +200,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
         if (deadSessionsRef.current >= MAX_DEAD_SESSIONS) {
           wantListeningRef.current = false
           recognitionRef.current = null
-          setListening(false)
+          setPhase('idle')
           onErrorRef.current?.(
             'The microphone opened but speech recognition returned nothing. This usually means the browser could not reach its transcription service.',
           )
@@ -216,7 +220,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
       trace('start() called without throwing')
       // Optimistic: some browsers fire neither `start` nor `audiostart` promptly, and the
       // indicator must never be missing while a session is genuinely running.
-      setListening(true)
+      setPhase('listening')
     } catch (err) {
       // start() throws if a previous session is still winding down; onend will retry.
       trace('start() threw', err)
@@ -236,6 +240,13 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     }
     if (wantListeningRef.current) return
 
+    // Claim intent *before* awaiting. The permission prompt can sit there for seconds, and
+    // until this is set a second click would read as "not listening" and start a rival
+    // session instead of stopping this one.
+    wantListeningRef.current = true
+    deadSessionsRef.current = 0
+    setPhase('starting')
+
     // Prime the microphone permission so the browser definitely prompts, then release it
     // immediately: holding the stream open can stop SpeechRecognition acquiring the mic.
     if (navigator.mediaDevices?.getUserMedia) {
@@ -244,6 +255,8 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
         trace('microphone permission granted; releasing the priming stream')
         stream.getTracks().forEach((track) => track.stop())
       } catch (err) {
+        wantListeningRef.current = false
+        setPhase('idle')
         const name = (err as DOMException)?.name
         if (name === 'NotAllowedError' || name === 'SecurityError') {
           onErrorRef.current?.(
@@ -259,8 +272,11 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
       }
     }
 
-    wantListeningRef.current = true
-    deadSessionsRef.current = 0
+    // The user may have pressed stop while the permission prompt was open.
+    if (!wantListeningRef.current) {
+      trace('start aborted — user stopped during the permission prompt')
+      return
+    }
     spawnSession()
   }, [spawnSession])
 
@@ -272,6 +288,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
   // Never leave a recognition session running behind us.
   useEffect(() => {
     return () => {
+      trace('component unmounted — aborting any session')
       wantListeningRef.current = false
       if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
       try {
@@ -285,7 +302,9 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
   return {
     supported,
     unsupportedReason: unsupportedReason(),
-    listening,
+    phase,
+    /** True from the moment the button is pressed, including the permission prompt. */
+    listening: phase !== 'idle',
     interim,
     start,
     stop,
