@@ -10,3 +10,9 @@ summary.json
 short.json
 custom_lables.json
 .vscode
+/venv
+triage.stderr.log
+triage.stdout.log
+.claude
+/frontend/node_modules
+/frontend/.env.example

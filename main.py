@@ -28,7 +28,26 @@ from googleapiclient.errors import HttpError
 
 from pydantic import BaseModel
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
 load_dotenv()
+
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 con = Console()
 
@@ -209,8 +228,8 @@ def attach_labels(labels, content, service):
         label_id = result["label_id"]
         try:
             body = {
-                "addLabelIds": [label_id],
-                # "removeLabelIds": [label_id],
+                # "addLabelIds": [label_id],
+                "removeLabelIds": [label_id],
             }
 
             service.users().messages().modify(
@@ -430,3 +449,20 @@ if __name__ == "__main__":
     answer = agent(service)
     print(answer)
 
+@app.post("/api/triage/run")
+def running_traige():
+    service = build("gmail", "v1", credentials=get_credentials())
+    response = agent(service=service)
+    return response
+
+@app.get("/api/triage/summary")
+def get_summary():
+    con.log("entered the route")
+    with open("summary.json", "r") as f:
+        summary = json.load(f)
+    results = generate_summary(summary)
+    return results
+
+@app.post("api/rag/multimodal-query")
+def rag():
+    pass
