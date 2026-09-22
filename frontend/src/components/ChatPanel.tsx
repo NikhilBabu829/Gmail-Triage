@@ -58,7 +58,12 @@ export function ChatPanel({
     [onInputChange],
   )
 
-  const { supported: sttSupported, listening, interim, toggle: toggleMic } = useSpeechRecognition({
+  const {
+    unsupportedReason: sttUnsupportedReason,
+    listening,
+    interim,
+    toggle: toggleMic,
+  } = useSpeechRecognition({
     onTranscript: appendTranscript,
     onError,
   })
@@ -167,29 +172,40 @@ export function ChatPanel({
 
       <div className="shrink-0 border-t border-line bg-panel/40 px-4 py-3 md:px-5">
         {listening && (
-          <div className="mb-2 flex items-center gap-2 text-[11px] text-red-300">
-            <span className="animate-rec size-2 rounded-full bg-red-500" aria-hidden="true" />
-            Listening…
-            {interim && <span className="truncate text-muted italic">“{interim}”</span>}
+          <div
+            role="status"
+            className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-200"
+          >
+            <span className="animate-rec size-2 shrink-0 rounded-full bg-red-500" aria-hidden="true" />
+            <span className="shrink-0 font-medium">Listening…</span>
+            <span className="truncate text-red-200/70">
+              {interim ? `“${interim}”` : 'Speak now — tap the square to finish.'}
+            </span>
           </div>
         )}
 
-        <div className="flex items-end gap-1.5 rounded-xl border border-line bg-panel px-1.5 py-1.5 focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/20">
+        <div
+          className={cn(
+            'flex items-end gap-1.5 rounded-xl border bg-panel px-1.5 py-1.5',
+            listening
+              ? 'border-red-500/50 ring-2 ring-red-500/25'
+              : 'border-line focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/20',
+          )}
+        >
+          {/* Never disabled: an unsupported browser explains itself on click. */}
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleMic}
-            disabled={!sttSupported}
             title={
-              sttSupported
-                ? listening
-                  ? 'Stop recording'
-                  : 'Dictate a question'
-                : 'Voice input is not supported in this browser'
+              sttUnsupportedReason ?? (listening ? 'Stop recording' : 'Dictate a question')
             }
             aria-label={listening ? 'Stop recording' : 'Start voice input'}
             aria-pressed={listening}
-            className={cn(listening && 'animate-rec bg-red-500/20 text-red-300')}
+            className={cn(
+              listening && 'animate-rec bg-red-500/20 text-red-300 hover:bg-red-500/25',
+              sttUnsupportedReason && 'opacity-60',
+            )}
           >
             {listening ? <Square className="size-3.5 fill-current" /> : <Mic className="size-4" />}
           </Button>
