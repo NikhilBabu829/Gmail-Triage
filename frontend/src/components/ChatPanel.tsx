@@ -9,6 +9,8 @@ import type { ChatMessage } from '@/lib/types'
 export interface ChatPanelHandle {
   focusInput: () => void
   setInput: (text: string) => void
+  /** Whether the mic is currently live, so the dashboard can stay quiet while dictating. */
+  isListening: () => boolean
 }
 
 interface Props {
@@ -50,6 +52,8 @@ export function ChatPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const streamRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  /** Mirrors `listening` so the imperative handle always reads the current value. */
+  const listeningRef = useRef(false)
 
   const appendTranscript = useCallback(
     (text: string) => {
@@ -69,9 +73,14 @@ export function ChatPanel({
     onError,
   })
 
+  useEffect(() => {
+    listeningRef.current = listening
+  }, [listening])
+
   // Expose focus/prefill to the dashboard so a triage card can seed the prompt.
   useEffect(() => {
     registerHandle({
+      isListening: () => listeningRef.current,
       focusInput: () => textareaRef.current?.focus(),
       setInput: (text) => {
         onInputChange(text)

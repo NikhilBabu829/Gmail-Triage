@@ -72,6 +72,18 @@ function trace(event: string, detail?: unknown) {
 const RESTART_DELAY_MS = 300
 /** Consecutive sessions that end without ever capturing audio before we give up loudly. */
 const MAX_DEAD_SESSIONS = 4
+/**
+ * How long a session may stay silent — no `start`, no `audiostart`, no `error` — before we
+ * call it dead. Chrome fires `start` in well under a second. Browsers that ship the Speech
+ * API without a speech backend (Opera/Opera GX, Brave, Arc) accept `start()` and then emit
+ * nothing at all, forever, so only a timer can catch them.
+ */
+const ENGINE_START_TIMEOUT_MS = 4000
+
+const NO_ENGINE_MESSAGE =
+  'Dictation did not start. This browser accepts the Speech API but has no transcription service behind it — Opera, Brave and Arc all behave this way. Use Chrome, Edge or Safari to dictate.'
+const NO_AUDIO_MESSAGE =
+  'Dictation started but never received any audio. Another app or browser tab may be holding the microphone.'
 
 export type VoicePhase = 'idle' | 'starting' | 'listening'
 
@@ -88,6 +100,15 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
   const deadSessionsRef = useRef(0)
   /** Whether the current session ever got as far as capturing audio. */
   const gotAudioRef = useRef(false)
+  /** Whether the current session ever fired `start`, i.e. the engine came up at all. */
+  const gotStartRef = useRef(false)
+  /** Fires if a session produces no lifecycle events whatsoever. */
+  const watchdogRef = useRef<number | null>(null)
+  /**
+   * Set once the watchdog has proven this browser cannot dictate, so later clicks explain
+   * immediately. Advisory only — pressing the button again still retries.
+   */
+  const engineDeadReasonRef = useRef<string | null>(null)
 
   const supported = unsupportedReason() === null
 
@@ -99,8 +120,16 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     onErrorRef.current = onError
   }, [onTranscript, onError])
 
+  const clearWatchdog = useCallback(() => {
+    if (watchdogRef.current) {
+      window.clearTimeout(watchdogRef.current)
+      watchdogRef.current = null
+    }
+  }, [])
+
   const stop = useCallback(() => {
     trace('stop() called by the user')
+    clearWatchdog()
     wantListeningRef.current = false
     if (restartTimerRef.current) {
       window.clearTimeout(restartTimerRef.current)
@@ -115,7 +144,39 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     }
     setPhase('idle')
     setInterim('')
-  }, [])
+  }, [clearWatchdog])
+
+  /**
+   * Catches a session that accepts `start()` and then emits nothing at all. Without this the
+   * UI would sit on "Listening…" forever in a browser that can never transcribe.
+   */
+  const armWatchdog = useCallback(() => {
+    clearWatchdog()
+    watchdogRef.current = window.setTimeout(() => {
+      watchdogRef.current = null
+      if (!wantListeningRef.current || gotAudioRef.current) return
+
+      const reason = gotStartRef.current ? NO_AUDIO_MESSAGE : NO_ENGINE_MESSAGE
+      trace('watchdog fired — engine produced no audio', { gotStart: gotStartRef.current })
+
+      wantListeningRef.current = false
+      engineDeadReasonRef.current = reason
+      if (restartTimerRef.current) {
+        window.clearTimeout(restartTimerRef.current)
+        restartTimerRef.current = null
+      }
+      const recognition = recognitionRef.current
+      recognitionRef.current = null
+      try {
+        recognition?.abort()
+      } catch {
+        /* nothing to abort */
+      }
+      setPhase('idle')
+      setInterim('')
+      onErrorRef.current?.(reason)
+    }, ENGINE_START_TIMEOUT_MS)
+  }, [clearWatchdog])
 
   /** Lets a session's `onend` start its successor without self-referencing the callback. */
   const spawnSessionRef = useRef<() => void>(() => {})
@@ -132,22 +193,30 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     recognition.maxAlternatives = 1
 
     gotAudioRef.current = false
+    gotStartRef.current = false
 
     // `audiostart` is the honest signal that the engine has the microphone.
     recognition.onaudiostart = () => {
       trace('audiostart — engine has the microphone')
+      clearWatchdog()
       gotAudioRef.current = true
+      gotStartRef.current = true
       deadSessionsRef.current = 0
+      engineDeadReasonRef.current = null
       setPhase('listening')
     }
+    // `start` only means the object accepted the call; audio may still never arrive.
     recognition.onstart = () => {
       trace('start')
-      setPhase('listening')
+      gotStartRef.current = true
     }
 
     recognition.onresult = (event) => {
       trace('result', { results: event.results.length })
+      clearWatchdog()
       gotAudioRef.current = true
+      gotStartRef.current = true
+      setPhase('listening')
       let live = ''
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]
@@ -164,6 +233,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
 
     recognition.onerror = (event) => {
       trace('error', event.error)
+      clearWatchdog()
       // Silence and self-aborts are routine; onend decides whether to restart.
       if (event.error === 'no-speech' || event.error === 'aborted') return
 
@@ -185,6 +255,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
 
     recognition.onend = () => {
       trace('end', { gotAudio: gotAudioRef.current, wantListening: wantListeningRef.current })
+      clearWatchdog()
       setInterim('')
 
       if (!wantListeningRef.current) {
@@ -218,15 +289,15 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     try {
       recognition.start()
       trace('start() called without throwing')
-      // Optimistic: some browsers fire neither `start` nor `audiostart` promptly, and the
-      // indicator must never be missing while a session is genuinely running.
-      setPhase('listening')
+      // Deliberately stay on 'starting'. Only `audiostart`/`result` prove the engine is
+      // really listening; claiming it here is what made a dead session look alive.
+      armWatchdog()
     } catch (err) {
       // start() throws if a previous session is still winding down; onend will retry.
       trace('start() threw', err)
       recognitionRef.current = null
     }
-  }, [])
+  }, [armWatchdog, clearWatchdog])
 
   useEffect(() => {
     spawnSessionRef.current = spawnSession
@@ -247,9 +318,37 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     deadSessionsRef.current = 0
     setPhase('starting')
 
+    // Speaking and dictating at once would let the assistant transcribe its own voice.
+    try {
+      window.speechSynthesis?.cancel()
+    } catch {
+      /* no speech synthesis here */
+    }
+
+    // If permission is already granted, start synchronously. Awaiting getUserMedia costs the
+    // click's user-activation window, which some Chromium builds require for recognition.
+    let alreadyGranted = false
+    try {
+      const status = await navigator.permissions?.query({
+        name: 'microphone' as PermissionName,
+      })
+      if (status?.state === 'denied') {
+        wantListeningRef.current = false
+        setPhase('idle')
+        onErrorRef.current?.(
+          'Microphone access is blocked for this site. Allow it in your browser settings, then try again.',
+        )
+        return
+      }
+      alreadyGranted = status?.state === 'granted'
+      trace('microphone permission state', status?.state ?? 'unknown')
+    } catch {
+      // Permissions API missing or lacking the `microphone` name: fall back to priming.
+    }
+
     // Prime the microphone permission so the browser definitely prompts, then release it
     // immediately: holding the stream open can stop SpeechRecognition acquiring the mic.
-    if (navigator.mediaDevices?.getUserMedia) {
+    if (!alreadyGranted && navigator.mediaDevices?.getUserMedia) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
         trace('microphone permission granted; releasing the priming stream')
@@ -277,6 +376,12 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
       trace('start aborted — user stopped during the permission prompt')
       return
     }
+
+    // Retrying after a proven-dead engine: say so up front rather than making the user wait
+    // out the watchdog again. The attempt still proceeds, in case something changed.
+    if (engineDeadReasonRef.current) {
+      onErrorRef.current?.(engineDeadReasonRef.current)
+    }
     spawnSession()
   }, [spawnSession])
 
@@ -290,6 +395,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     return () => {
       trace('component unmounted — aborting any session')
       wantListeningRef.current = false
+      if (watchdogRef.current) window.clearTimeout(watchdogRef.current)
       if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
       try {
         recognitionRef.current?.abort()

@@ -162,8 +162,10 @@ export default function App() {
           content: answer,
           sources: result.sources,
         })
-        // Speech synthesis can't consume a stream, so read the finished answer.
-        if (autoRead && answer) speech.speak(placeholderId, answer)
+        // Speech synthesis can't consume a stream, so read the finished answer. Stay quiet
+        // while the mic is live, or the assistant dictates its own reply into the input.
+        if (autoRead && answer && !chatHandle.current?.isListening())
+          speech.speak(placeholderId, answer)
       } catch (err) {
         if (isAbort(err)) {
           // Keep whatever streamed in before the user hit stop.
