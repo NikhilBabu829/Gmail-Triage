@@ -5,7 +5,7 @@ import { ChatPanel, type ChatPanelHandle } from '@/components/ChatPanel'
 import { Toaster } from '@/components/Toaster'
 import { useToasts } from '@/hooks/useToasts'
 import { useSpeech } from '@/hooks/useSpeech'
-import { ApiError, fetchSummary, isAbort, multimodalQuery, runTriage } from '@/lib/api'
+import { ApiError, fetchSummary, isAbort, runTriage, streamMultimodalQuery } from '@/lib/api'
 import { senderName, truncate } from '@/lib/utils'
 import type { ChatMessage, TriagedEmail } from '@/lib/types'
 
@@ -39,6 +39,8 @@ export default function App() {
   const { toasts, push, dismiss } = useToasts()
   const speech = useSpeech()
   const chatHandle = useRef<ChatPanelHandle | null>(null)
+  /** Aborts the in-flight SSE read when the user stops generation. */
+  const streamRef = useRef<AbortController | null>(null)
   const registerHandle = useCallback((handle: ChatPanelHandle | null) => {
     chatHandle.current = handle
   }, [])
@@ -126,37 +128,87 @@ export default function App() {
       ])
       setSending(true)
 
-      try {
-        const result = await multimodalQuery(prompt, image)
+      const patch = (id: string, changes: Partial<ChatMessage>) =>
         setMessages((prev) =>
-          prev.map((message) =>
-            message.id === placeholderId
-              ? {
-                  ...message,
-                  pending: false,
-                  content: result.answer ?? '',
-                  sources: result.sources ?? [],
-                }
-              : message,
-          ),
+          prev.map((message) => (message.id === id ? { ...message, ...changes } : message)),
         )
-        if (autoRead && result.answer) speech.speak(placeholderId, result.answer)
+
+      const controller = new AbortController()
+      streamRef.current = controller
+
+      try {
+        const result = await streamMultimodalQuery(
+          prompt,
+          image,
+          {
+            onToken: (text) =>
+              setMessages((prev) =>
+                prev.map((message) =>
+                  message.id === placeholderId
+                    ? {
+                        ...message,
+                        pending: false,
+                        streaming: true,
+                        content: message.content + text,
+                      }
+                    : message,
+                ),
+              ),
+            onSources: (sources) => patch(placeholderId, { sources }),
+          },
+          controller.signal,
+        )
+
+        // A stream that closed without emitting a single token still needs to say something.
+        const answer =
+          result.answer ||
+          'No answer came back for that question. There may be no matching emails indexed yet.'
+        patch(placeholderId, {
+          pending: false,
+          streaming: false,
+          content: answer,
+          sources: result.sources,
+        })
+        // Speech synthesis can't consume a stream, so read the finished answer.
+        if (autoRead && answer) speech.speak(placeholderId, answer)
       } catch (err) {
+        if (isAbort(err)) {
+          // Keep whatever streamed in before the user hit stop.
+          setMessages((prev) =>
+            prev.map((item) =>
+              item.id === placeholderId
+                ? item.content
+                  ? { ...item, pending: false, streaming: false }
+                  : { ...item, pending: false, streaming: false, error: true, content: 'Stopped.' }
+                : item,
+            ),
+          )
+          return
+        }
         const message = err instanceof ApiError ? err.message : 'The assistant request failed.'
         setMessages((prev) =>
           prev.map((item) =>
             item.id === placeholderId
-              ? { ...item, pending: false, error: true, content: message }
+              ? { ...item, pending: false, streaming: false, error: true, content: message }
               : item,
           ),
         )
         push('Copilot request failed', { description: message, variant: 'error' })
       } finally {
+        if (streamRef.current === controller) streamRef.current = null
         setSending(false)
       }
     },
     [autoRead, push, speech],
   )
+
+  const handleStopStream = useCallback(() => {
+    streamRef.current?.abort()
+    streamRef.current = null
+  }, [])
+
+  // A navigation mid-stream should not leave the request hanging.
+  useEffect(() => () => streamRef.current?.abort(), [])
 
   const handleToggleSpeech = useCallback(
     (message: ChatMessage) => speech.toggle(message.id, message.content),
@@ -205,6 +257,7 @@ export default function App() {
               input={input}
               onInputChange={setInput}
               onSend={handleSend}
+              onStop={handleStopStream}
               onError={handleVoiceError}
               speakingId={speech.speakingId}
               ttsSupported={speech.supported}

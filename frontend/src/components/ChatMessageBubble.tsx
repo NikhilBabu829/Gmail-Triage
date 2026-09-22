@@ -57,13 +57,19 @@ export function ChatMessageBubble({ message, speaking, ttsSupported, onToggleSpe
           ) : (
             <div className="md-body">
               <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+              {message.streaming && (
+                <span
+                  className="animate-caret ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 bg-accent align-baseline"
+                  aria-hidden="true"
+                />
+              )}
             </div>
           )}
 
           {!isUser && message.sources && <SourcesAccordion sources={message.sources} />}
         </div>
 
-        {!isUser && !message.pending && !message.error && ttsSupported && (
+        {!isUser && !message.pending && !message.streaming && !message.error && ttsSupported && (
           <button
             type="button"
             onClick={() => onToggleSpeech(message)}

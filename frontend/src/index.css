@@ -120,3 +120,17 @@ body {
   padding: 0.3rem 0.5rem;
   text-align: left;
 }
+
+@keyframes caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  55%,
+  100% {
+    opacity: 0;
+  }
+}
+.animate-caret {
+  animation: caret-blink 1s steps(1, end) infinite;
+}

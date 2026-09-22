@@ -24,6 +24,9 @@ export interface ChatMessage {
   /** Object URL of an attached image, user messages only. */
   imageUrl?: string
   sources?: TriagedEmail[]
+  /** Waiting on the first token. */
   pending?: boolean
+  /** Tokens are still arriving. */
+  streaming?: boolean
   error?: boolean
 }
