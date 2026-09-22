@@ -1,5 +1,3 @@
-#TODO -  Create a frontend rag page
-#TODO - the rag page should be about the summary we received as a response from the model
 #TODO - add multimodal capabilities, where the uesr can ask question using voice, and also get the response back in actual voice
 
 import os
@@ -12,7 +10,7 @@ from rich.console import Console
 
 from anthropic import Anthropic
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  
 
 import json
 import re
@@ -30,6 +28,7 @@ from pydantic import BaseModel
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 app = FastAPI()
 
@@ -432,6 +431,10 @@ def agent(service, max_safety_turns=10):
 
     return messages
 
+def insertion():
+    with open("long_content.json" "r") as f:
+        long_content = json.load(f)
+    
 
 if __name__ == "__main__":
     service = build("gmail", "v1", credentials=get_credentials())
@@ -465,4 +468,11 @@ def get_summary():
 
 @app.post("api/rag/multimodal-query")
 def rag():
-    pass
+    return StreamingResponse(
+        query_rag(query=prompt),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive"
+        }
+    )

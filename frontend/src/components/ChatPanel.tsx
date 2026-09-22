@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ImagePlus, Mic, Paperclip, SendHorizontal, Sparkles, Square, X } from 'lucide-react'
 import { ChatMessageBubble } from './ChatMessageBubble'
-import { Button, Spinner } from './ui'
+import { Button } from './ui'
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition'
 import { cn, isAcceptedImage } from '@/lib/utils'
 import type { ChatMessage } from '@/lib/types'
@@ -18,6 +18,8 @@ interface Props {
   /** A state setter, so voice transcripts can append to whatever is already typed. */
   onInputChange: React.Dispatch<React.SetStateAction<string>>
   onSend: (prompt: string, image: File | null) => void
+  /** Aborts an in-flight answer stream. */
+  onStop: () => void
   onError: (message: string) => void
   speakingId: string | null
   ttsSupported: boolean
@@ -38,6 +40,7 @@ export function ChatPanel({
   input,
   onInputChange,
   onSend,
+  onStop,
   onError,
   speakingId,
   ttsSupported,
@@ -52,6 +55,7 @@ export function ChatPanel({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const streamRef = useRef<HTMLDivElement>(null)
   const dragDepth = useRef(0)
+  const stickToBottom = useRef(true)
 
   const appendTranscript = useCallback(
     (text: string) => {
@@ -90,10 +94,18 @@ export function ChatPanel({
     el.style.height = `${Math.min(el.scrollHeight, 168)}px`
   }, [input, interim])
 
+  // Follow new tokens, but stop following once the user scrolls up to read back.
   useEffect(() => {
     const el = streamRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
   }, [messages])
+
+  const onStreamScroll = () => {
+    const el = streamRef.current
+    if (!el) return
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+    stickToBottom.current = distance < 48
+  }
 
   const clearAttachment = useCallback(() => {
     setAttachment((current) => {
@@ -176,7 +188,11 @@ export function ChatPanel({
         </div>
       )}
 
-      <div ref={streamRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 md:px-5">
+      <div
+        ref={streamRef}
+        onScroll={onStreamScroll}
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 md:px-5"
+      >
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <div className="flex size-12 items-center justify-center rounded-2xl border border-accent/30 bg-accentsoft">
@@ -294,16 +310,28 @@ export function ChatPanel({
             className="max-h-42 min-h-9 flex-1 resize-none bg-transparent py-1.5 text-sm leading-relaxed text-ink outline-none placeholder:text-muted"
           />
 
-          <Button
-            variant="primary"
-            size="icon"
-            onClick={submit}
-            disabled={sending || input.trim().length === 0}
-            title="Send"
-            aria-label="Send message"
-          >
-            {sending ? <Spinner /> : <SendHorizontal className="size-4" />}
-          </Button>
+          {sending ? (
+            <Button
+              variant="danger"
+              size="icon"
+              onClick={onStop}
+              title="Stop generating"
+              aria-label="Stop generating"
+            >
+              <Square className="size-3.5 fill-current" />
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              size="icon"
+              onClick={submit}
+              disabled={input.trim().length === 0}
+              title="Send"
+              aria-label="Send message"
+            >
+              <SendHorizontal className="size-4" />
+            </Button>
+          )}
         </div>
       </div>
     </section>

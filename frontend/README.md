@@ -20,12 +20,37 @@ npm run dev            # http://localhost:5173
 | --- | --- | --- | --- |
 | `/api/triage/run` | POST | `{}` | `{ status: "running" \| "completed", message: string }` |
 | `/api/triage/summary` | GET | — | `[{ message_id, sender, summary }]` |
-| `/api/rag/multimodal-query` | POST | `multipart/form-data` with `prompt` (string) and optional `image` (file) | `{ answer: string /* markdown */, sources: [{ message_id, sender, summary }] }` |
+| `/api/rag/multimodal-query` | POST | `multipart/form-data` with `prompt` (string) and optional `image` (file) | `text/event-stream` (see below) |
 
 CORS must allow the dev origin (`http://localhost:5173`).
 
-> These HTTP routes do not exist in `main.py` yet — it is currently a script, not a
-> server. Until they are added, the UI loads and shows an "unreachable backend" toast.
+### Streaming the answer
+
+The query route is a POST carrying form data, so the native `EventSource` (GET only) cannot
+read it. `streamMultimodalQuery` in `src/lib/api.ts` POSTs with `fetch` and pulls the reply off
+`response.body.getReader()`, decoding SSE frames as they arrive. Frames handled:
+
+| Event | `data` | Effect |
+| --- | --- | --- |
+| `token` | a JSON-encoded string | appended to the answer as it renders |
+| `sources` | a JSON array of `{ message_id, sender, summary }` | fills "Referenced Emails" |
+| `error` | string, or `{ message }` | aborts and surfaces a toast |
+| `done` | `{}` | ends the stream |
+
+`rag.py` currently emits only `token` and `done`. The `sources` frame is supported so citations
+appear the moment the backend starts sending them — until then the accordion is simply omitted.
+If the endpoint replies with `application/json` instead of a stream, the client falls back to
+reading `{ answer, sources }` in one piece, so both shapes work.
+
+A stream that closes without emitting any token (the "no relevant emails" path returns early
+before yielding) renders an explanatory message rather than an empty bubble.
+
+> **Backend gaps as of this commit.** The route decorator in `main.py` reads
+> `@app.post("api/rag/multimodal-query")` — without a leading slash it will not match
+> `POST /api/rag/multimodal-query`. The handler also takes no arguments while referencing an
+> undefined `prompt`, so the multipart `prompt`/`image` fields are never read, and `query_rag`
+> builds a `sources` list it never yields. The frontend is written to the contract above and
+> will work once those are fixed.
 
 ## Layout
 
