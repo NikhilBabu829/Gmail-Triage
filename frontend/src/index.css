@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0b0d10;
+  --color-panel: #12151a;
+  --color-panel2: #171b21;
+  --color-line: #242a33;
+  --color-ink: #e7ecf3;
+  --color-muted: #8b95a5;
+  --color-accent: #4f8cff;
+  --color-accentsoft: #1b2942;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a313c;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a434f;
+}
+
+@keyframes pulse-rec {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(239, 68, 68, 0);
+  }
+}
+.animate-rec {
+  animation: pulse-rec 1.2s ease-in-out infinite;
+}
+
+/* Markdown rendering for assistant answers */
+.md-body {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.md-body > * + * {
+  margin-top: 0.6rem;
+}
+.md-body strong {
+  color: #fff;
+  font-weight: 650;
+}
+.md-body ul {
+  list-style: disc;
+  padding-left: 1.15rem;
+}
+.md-body ol {
+  list-style: decimal;
+  padding-left: 1.3rem;
+}
+.md-body li + li {
+  margin-top: 0.25rem;
+}
+.md-body a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.md-body code {
+  background: #0b0e12;
+  border: 1px solid var(--color-line);
+  padding: 0.08rem 0.32rem;
+  border-radius: 5px;
+  font-size: 0.8em;
+}
+.md-body pre {
+  background: #0b0e12;
+  border: 1px solid var(--color-line);
+  padding: 0.7rem 0.85rem;
+  border-radius: 9px;
+  overflow-x: auto;
+}
+.md-body pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3 {
+  font-weight: 650;
+  color: #fff;
+}
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--color-line);
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+}

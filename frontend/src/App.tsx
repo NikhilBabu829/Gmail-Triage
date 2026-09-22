@@ -1,0 +1,220 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { TopBar } from '@/components/TopBar'
+import { TriageFeed } from '@/components/TriageFeed'
+import { ChatPanel, type ChatPanelHandle } from '@/components/ChatPanel'
+import { Toaster } from '@/components/Toaster'
+import { useToasts } from '@/hooks/useToasts'
+import { useSpeech } from '@/hooks/useSpeech'
+import { ApiError, fetchSummary, isAbort, multimodalQuery, runTriage } from '@/lib/api'
+import { senderName, truncate } from '@/lib/utils'
+import type { ChatMessage, TriagedEmail } from '@/lib/types'
+
+const AUTO_READ_KEY = 'gmail-triage:auto-read'
+
+function newId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+export default function App() {
+  const [emails, setEmails] = useState<TriagedEmail[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [input, setInput] = useState('')
+  const [sending, setSending] = useState(false)
+
+  const [autoRead, setAutoRead] = useState(() => {
+    try {
+      return localStorage.getItem(AUTO_READ_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const [mobileView, setMobileView] = useState<'feed' | 'chat'>('feed')
+
+  const { toasts, push, dismiss } = useToasts()
+  const speech = useSpeech()
+  const chatHandle = useRef<ChatPanelHandle | null>(null)
+  const registerHandle = useCallback((handle: ChatPanelHandle | null) => {
+    chatHandle.current = handle
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_READ_KEY, autoRead ? '1' : '0')
+    } catch {
+      /* Storage can be unavailable in private mode; the toggle still works in-session. */
+    }
+  }, [autoRead])
+
+  const loadSummary = useCallback(
+    async (mode: 'initial' | 'refresh' = 'refresh', signal?: AbortSignal) => {
+      // `loading` already starts true, so the initial load has nothing to flip on.
+      if (mode === 'refresh') setRefreshing(true)
+      try {
+        const data = await fetchSummary(signal)
+        setEmails(data)
+        setSummaryError(null)
+        return data
+      } catch (err) {
+        if (isAbort(err)) return null
+        const message = err instanceof ApiError ? err.message : 'Unexpected error loading summary.'
+        setSummaryError(message)
+        push('Backend unreachable', { description: message, variant: 'error' })
+        return null
+      } finally {
+        setLoading(false)
+        setRefreshing(false)
+      }
+    },
+    [push],
+  )
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void loadSummary('initial', controller.signal)
+    return () => controller.abort()
+  }, [loadSummary])
+
+  const handleRunTriage = useCallback(async () => {
+    setRunning(true)
+    try {
+      const result = await runTriage()
+      const data = await loadSummary('refresh')
+      push(result.status === 'completed' ? 'Triage complete' : 'Triage started', {
+        description:
+          result.message ||
+          (data ? `${data.length} email${data.length === 1 ? '' : 's'} in the feed.` : undefined),
+        variant: 'success',
+      })
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Could not start the triage run.'
+      push('Triage failed', { description: message, variant: 'error' })
+    } finally {
+      setRunning(false)
+    }
+  }, [loadSummary, push])
+
+  const handleAskCopilot = useCallback((email: TriagedEmail) => {
+    const prompt = `Tell me more about the email from ${senderName(email.sender)} regarding ${truncate(
+      email.summary,
+      120,
+    )}`
+    chatHandle.current?.setInput(prompt)
+    setMobileView('chat')
+    // The panel mounts on first switch to the chat view, so re-apply after it exists.
+    requestAnimationFrame(() => chatHandle.current?.setInput(prompt))
+  }, [])
+
+  const handleSend = useCallback(
+    async (prompt: string, image: File | null) => {
+      const userMessage: ChatMessage = {
+        id: newId(),
+        role: 'user',
+        content: prompt,
+        imageUrl: image ? URL.createObjectURL(image) : undefined,
+      }
+      const placeholderId = newId()
+      setMessages((prev) => [
+        ...prev,
+        userMessage,
+        { id: placeholderId, role: 'assistant', content: '', pending: true },
+      ])
+      setSending(true)
+
+      try {
+        const result = await multimodalQuery(prompt, image)
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === placeholderId
+              ? {
+                  ...message,
+                  pending: false,
+                  content: result.answer ?? '',
+                  sources: result.sources ?? [],
+                }
+              : message,
+          ),
+        )
+        if (autoRead && result.answer) speech.speak(placeholderId, result.answer)
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : 'The assistant request failed.'
+        setMessages((prev) =>
+          prev.map((item) =>
+            item.id === placeholderId
+              ? { ...item, pending: false, error: true, content: message }
+              : item,
+          ),
+        )
+        push('Copilot request failed', { description: message, variant: 'error' })
+      } finally {
+        setSending(false)
+      }
+    },
+    [autoRead, push, speech],
+  )
+
+  const handleToggleSpeech = useCallback(
+    (message: ChatMessage) => speech.toggle(message.id, message.content),
+    [speech],
+  )
+
+  const handleVoiceError = useCallback(
+    (message: string) => push('Voice input unavailable', { description: message, variant: 'error' }),
+    [push],
+  )
+
+  return (
+    <div className="flex h-full flex-col">
+      <TopBar
+        running={running}
+        refreshing={refreshing}
+        autoRead={autoRead}
+        onAutoReadChange={setAutoRead}
+        onRunTriage={handleRunTriage}
+        onRefresh={() => void loadSummary('refresh')}
+        speaking={speech.speaking}
+        onStopSpeech={speech.stop}
+        ttsSupported={speech.supported}
+        mobileView={mobileView}
+        onMobileViewChange={setMobileView}
+      />
+
+      <main className="grid min-h-0 flex-1 md:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:grid-cols-[minmax(0,1fr)_minmax(0,30rem)]">
+        <div className={mobileView === 'feed' ? 'min-h-0' : 'hidden min-h-0 md:block'}>
+          <TriageFeed
+              emails={emails}
+              loading={loading}
+              running={running}
+              error={summaryError}
+              query={query}
+              onQueryChange={setQuery}
+              onRunTriage={handleRunTriage}
+            onAskCopilot={handleAskCopilot}
+          />
+        </div>
+
+        <div className={mobileView === 'chat' ? 'min-h-0' : 'hidden min-h-0 md:block'}>
+          <ChatPanel
+              messages={messages}
+              sending={sending}
+              input={input}
+              onInputChange={setInput}
+              onSend={handleSend}
+              onError={handleVoiceError}
+              speakingId={speech.speakingId}
+              ttsSupported={speech.supported}
+              onToggleSpeech={handleToggleSpeech}
+            registerHandle={registerHandle}
+          />
+        </div>
+      </main>
+
+      <Toaster toasts={toasts} onDismiss={dismiss} />
+    </div>
+  )
+}
