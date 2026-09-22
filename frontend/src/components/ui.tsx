@@ -24,12 +24,13 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant = 'secondary', size = 'md', ...props },
+  { className, variant = 'secondary', size = 'md', type = 'button', ...props },
   ref,
 ) {
   return (
     <button
       ref={ref}
+      type={type}
       className={cn(
         'inline-flex shrink-0 items-center rounded-lg font-medium transition-colors outline-none',
         'focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg',

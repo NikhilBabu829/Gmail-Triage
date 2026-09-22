@@ -77,7 +77,29 @@ Two things the naive implementation gets wrong, both handled here:
 The mic button is never silently disabled. Where dictation cannot run, clicking it explains
 why — an insecure origin (opening the app over a LAN IP rather than `localhost`/HTTPS disables
 the microphone APIs entirely), a browser without the Speech API (Firefox), a blocked
-permission, a missing input device, or a browser that blocks the recognition service (Brave).
+permission, or a missing input device.
+
+### Browser support for dictation
+
+**Dictation needs Chrome, Edge or Safari.** Feature detection is not enough to tell you this:
+several Chromium forks — Opera and Opera GX, Brave, Arc — expose `webkitSpeechRecognition`
+but ship no transcription backend. Every detect passes, the button enables, `start()` is
+accepted, and the engine then emits *nothing at all*: no `start`, no `audiostart`, no
+`error`, forever. caniuse lists the Speech Recognition API as unsupported in Opera outright.
+
+Since no event marks that failure, a timer is the only way to catch it. `spawnSession` arms a
+watchdog (`ENGINE_START_TIMEOUT_MS`, 4s) after `start()`; every lifecycle event clears it. If
+it elapses, the session is aborted and the user is told why, distinguishing two cases:
+
+- no `start` at all → the engine never came up; the browser has no speech backend.
+- `start` but no `audiostart` → the engine never got the mic; another app or tab holds it.
+
+Consequently the UI only claims to be **Listening…** once `audiostart` or `result` proves the
+engine is really running. Until then it shows **Starting…**. Claiming otherwise is what
+previously made a permanently dead session look alive.
+
+Text-to-speech is unaffected by all of this — `speechSynthesis` is fully local and works
+everywhere, Opera GX included.
 
 Playback reads the completed answer — `speechSynthesis` cannot consume a stream, so TTS waits
 for the `done` frame rather than speaking each token. Markdown is stripped before speaking
