@@ -20,10 +20,13 @@ interface SpeechRecognitionLike {
   lang: string
   continuous: boolean
   interimResults: boolean
+  maxAlternatives: number
   start(): void
   stop(): void
   abort(): void
   onstart: (() => void) | null
+  onaudiostart: (() => void) | null
+  onspeechstart: (() => void) | null
   onresult: ((event: SpeechRecognitionEventLike) => void) | null
   onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
   onend: (() => void) | null
@@ -45,9 +48,6 @@ function unsupportedReason(): string | null {
   if (!window.isSecureContext) {
     return `Voice input needs a secure page. Open the app on localhost or over https:// (this page is ${window.location.origin}).`
   }
-  if (!navigator.mediaDevices?.getUserMedia) {
-    return 'This browser exposes no microphone API, so voice input is unavailable.'
-  }
   if (!getCtor()) {
     return 'This browser has no Speech Recognition support. Chrome, Edge or Safari can dictate; Firefox cannot.'
   }
@@ -60,21 +60,31 @@ interface Options {
   onError?: (message: string) => void
 }
 
+/** Dev-only tracing, so a silent failure can be seen in the console. */
+function trace(event: string, detail?: unknown) {
+  if (import.meta.env.DEV) {
+    if (detail === undefined) console.debug(`[voice] ${event}`)
+    else console.debug(`[voice] ${event}`, detail)
+  }
+}
+
 /** Chrome ends a session after a few seconds of silence; restart unless the user stopped. */
-const RESTART_DELAY_MS = 250
-const MAX_RESTARTS_PER_MINUTE = 40
+const RESTART_DELAY_MS = 300
+/** Consecutive sessions that end without ever capturing audio before we give up loudly. */
+const MAX_DEAD_SESSIONS = 4
 
 export function useSpeechRecognition({ onTranscript, onError }: Options) {
   const [listening, setListening] = useState(false)
   const [interim, setInterim] = useState('')
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
-  /** The mic capture we hold open so the browser shows its "in use" indicator. */
-  const streamRef = useRef<MediaStream | null>(null)
   /** True while the user wants to dictate — survives the engine's own restarts. */
   const wantListeningRef = useRef(false)
-  const restartTimesRef = useRef<number[]>([])
   const restartTimerRef = useRef<number | null>(null)
+  /** Sessions in a row that never reached `audiostart`, i.e. the engine never listened. */
+  const deadSessionsRef = useRef(0)
+  /** Whether the current session ever got as far as capturing audio. */
+  const gotAudioRef = useRef(false)
 
   const supported = unsupportedReason() === null
 
@@ -85,11 +95,6 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     onTranscriptRef.current = onTranscript
     onErrorRef.current = onError
   }, [onTranscript, onError])
-
-  const releaseStream = useCallback(() => {
-    streamRef.current?.getTracks().forEach((track) => track.stop())
-    streamRef.current = null
-  }, [])
 
   const stop = useCallback(() => {
     wantListeningRef.current = false
@@ -104,10 +109,9 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     } catch {
       /* already stopped */
     }
-    releaseStream()
     setListening(false)
     setInterim('')
-  }, [releaseStream])
+  }, [])
 
   /** Lets a session's `onend` start its successor without self-referencing the callback. */
   const spawnSessionRef = useRef<() => void>(() => {})
@@ -121,13 +125,25 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     recognition.lang = navigator.language || 'en-US'
     recognition.continuous = true
     recognition.interimResults = true
+    recognition.maxAlternatives = 1
 
+    gotAudioRef.current = false
+
+    // `audiostart` is the honest signal that the engine has the microphone.
+    recognition.onaudiostart = () => {
+      trace('audiostart — engine has the microphone')
+      gotAudioRef.current = true
+      deadSessionsRef.current = 0
+      setListening(true)
+    }
     recognition.onstart = () => {
-      // Only now is the mic genuinely live.
+      trace('start')
       setListening(true)
     }
 
     recognition.onresult = (event) => {
+      trace('result', { results: event.results.length })
+      gotAudioRef.current = true
       let live = ''
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]
@@ -143,7 +159,8 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     }
 
     recognition.onerror = (event) => {
-      // Silence and self-aborts are routine; onend restarts the session.
+      trace('error', event.error)
+      // Silence and self-aborts are routine; onend decides whether to restart.
       if (event.error === 'no-speech' || event.error === 'aborted') return
 
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
@@ -152,38 +169,41 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
         )
       } else if (event.error === 'network') {
         onErrorRef.current?.(
-          'Speech recognition could not reach its network service. Some browsers (Brave, for example) block it.',
+          'Speech recognition could not reach its online service. Chrome and Safari send audio to Google/Apple to transcribe; a VPN, firewall or a browser like Brave can block it.',
         )
       } else if (event.error === 'audio-capture') {
         onErrorRef.current?.('No microphone was found. Check your input device and try again.')
       } else {
         onErrorRef.current?.(`Voice input failed (${event.error}).`)
       }
-      // These are fatal for the session; don't fight them with restarts.
       wantListeningRef.current = false
     }
 
     recognition.onend = () => {
+      trace('end', { gotAudio: gotAudioRef.current, wantListening: wantListeningRef.current })
       setInterim('')
+
       if (!wantListeningRef.current) {
         recognitionRef.current = null
-        releaseStream()
         setListening(false)
         return
       }
 
-      // Guard against a session that dies instantly and spins.
-      const now = Date.now()
-      restartTimesRef.current = restartTimesRef.current.filter((t) => now - t < 60_000)
-      if (restartTimesRef.current.length >= MAX_RESTARTS_PER_MINUTE) {
-        wantListeningRef.current = false
-        recognitionRef.current = null
-        releaseStream()
-        setListening(false)
-        onErrorRef.current?.('Voice input kept dropping out, so it has been switched off.')
-        return
+      // A session that ended without ever capturing audio is a real failure, not a
+      // silence timeout. Retry a few times, then say so instead of spinning quietly.
+      if (!gotAudioRef.current) {
+        deadSessionsRef.current += 1
+        if (deadSessionsRef.current >= MAX_DEAD_SESSIONS) {
+          wantListeningRef.current = false
+          recognitionRef.current = null
+          setListening(false)
+          onErrorRef.current?.(
+            'The microphone opened but speech recognition returned nothing. This usually means the browser could not reach its transcription service.',
+          )
+          return
+        }
       }
-      restartTimesRef.current.push(now)
+
       restartTimerRef.current = window.setTimeout(() => {
         restartTimerRef.current = null
         if (wantListeningRef.current) spawnSessionRef.current()
@@ -193,11 +213,16 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     recognitionRef.current = recognition
     try {
       recognition.start()
-    } catch {
+      trace('start() called without throwing')
+      // Optimistic: some browsers fire neither `start` nor `audiostart` promptly, and the
+      // indicator must never be missing while a session is genuinely running.
+      setListening(true)
+    } catch (err) {
       // start() throws if a previous session is still winding down; onend will retry.
+      trace('start() threw', err)
       recognitionRef.current = null
     }
-  }, [releaseStream])
+  }, [])
 
   useEffect(() => {
     spawnSessionRef.current = spawnSession
@@ -211,26 +236,31 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     }
     if (wantListeningRef.current) return
 
-    // Ask for the microphone explicitly. SpeechRecognition alone does not reliably
-    // prompt, and holding the stream is what shows the browser's mic indicator.
-    try {
-      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
-    } catch (err) {
-      const name = (err as DOMException)?.name
-      if (name === 'NotAllowedError' || name === 'SecurityError') {
-        onErrorRef.current?.(
-          'Microphone permission was denied. Allow it for this site in your browser settings, then try again.',
-        )
-      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-        onErrorRef.current?.('No microphone was found. Connect one and try again.')
-      } else {
-        onErrorRef.current?.(`Could not open the microphone (${name ?? 'unknown error'}).`)
+    // Prime the microphone permission so the browser definitely prompts, then release it
+    // immediately: holding the stream open can stop SpeechRecognition acquiring the mic.
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        trace('microphone permission granted; releasing the priming stream')
+        stream.getTracks().forEach((track) => track.stop())
+      } catch (err) {
+        const name = (err as DOMException)?.name
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+          onErrorRef.current?.(
+            'Microphone permission was denied. Allow it for this site in your browser settings, then try again.',
+          )
+          return
+        }
+        if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+          onErrorRef.current?.('No microphone was found. Connect one and try again.')
+          return
+        }
+        // Anything else (device busy, for instance): let recognition try anyway.
       }
-      return
     }
 
     wantListeningRef.current = true
-    restartTimesRef.current = []
+    deadSessionsRef.current = 0
     spawnSession()
   }, [spawnSession])
 
@@ -239,7 +269,7 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
     else void start()
   }, [start, stop])
 
-  // Never leave the microphone open behind us.
+  // Never leave a recognition session running behind us.
   useEffect(() => {
     return () => {
       wantListeningRef.current = false
@@ -249,9 +279,16 @@ export function useSpeechRecognition({ onTranscript, onError }: Options) {
       } catch {
         /* nothing to abort */
       }
-      streamRef.current?.getTracks().forEach((track) => track.stop())
     }
   }, [])
 
-  return { supported, unsupportedReason: unsupportedReason(), listening, interim, start, stop, toggle }
+  return {
+    supported,
+    unsupportedReason: unsupportedReason(),
+    listening,
+    interim,
+    start,
+    stop,
+    toggle,
+  }
 }
