@@ -43,19 +43,6 @@ body {
   background: #3a434f;
 }
 
-@keyframes pulse-rec {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
-  }
-  50% {
-    box-shadow: 0 0 0 7px rgba(239, 68, 68, 0);
-  }
-}
-.animate-rec {
-  animation: pulse-rec 1.2s ease-in-out infinite;
-}
-
 /* Markdown rendering for assistant answers */
 .md-body {
   font-size: 0.875rem;
