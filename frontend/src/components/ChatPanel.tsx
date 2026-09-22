@@ -60,6 +60,7 @@ export function ChatPanel({
 
   const {
     unsupportedReason: sttUnsupportedReason,
+    phase: voicePhase,
     listening,
     interim,
     toggle: toggleMic,
@@ -177,9 +178,15 @@ export function ChatPanel({
             className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-200"
           >
             <span className="animate-rec size-2 shrink-0 rounded-full bg-red-500" aria-hidden="true" />
-            <span className="shrink-0 font-medium">Listening…</span>
+            <span className="shrink-0 font-medium">
+              {voicePhase === 'starting' ? 'Starting…' : 'Listening…'}
+            </span>
             <span className="truncate text-red-200/70">
-              {interim ? `“${interim}”` : 'Speak now — tap the square to finish.'}
+              {voicePhase === 'starting'
+                ? 'Waiting for the microphone — allow access if your browser asks.'
+                : interim
+                  ? `“${interim}”`
+                  : 'Speak now — tap the square to finish.'}
             </span>
           </div>
         )}
