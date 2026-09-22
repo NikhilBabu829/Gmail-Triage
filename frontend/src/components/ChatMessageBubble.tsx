@@ -39,14 +39,6 @@ export function ChatMessageBubble({ message, speaking, ttsSupported, onToggleSpe
                 : 'border-line bg-panel',
           )}
         >
-          {message.imageUrl && (
-            <img
-              src={message.imageUrl}
-              alt="Attached image"
-              className="mb-2 max-h-44 w-auto rounded-lg border border-line object-contain"
-            />
-          )}
-
           {message.pending ? (
             <div className="flex items-center gap-2 text-sm text-muted">
               <Spinner className="size-3.5" />

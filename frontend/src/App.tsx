@@ -5,7 +5,7 @@ import { ChatPanel, type ChatPanelHandle } from '@/components/ChatPanel'
 import { Toaster } from '@/components/Toaster'
 import { useToasts } from '@/hooks/useToasts'
 import { useSpeech } from '@/hooks/useSpeech'
-import { ApiError, fetchSummary, isAbort, runTriage, streamMultimodalQuery } from '@/lib/api'
+import { ApiError, fetchSummary, isAbort, runTriage, streamRagQuery } from '@/lib/api'
 import { senderName, truncate } from '@/lib/utils'
 import type { ChatMessage, TriagedEmail } from '@/lib/types'
 import localSummary from 'virtual:triage-summary'
@@ -108,12 +108,11 @@ export default function App() {
   }, [])
 
   const handleSend = useCallback(
-    async (prompt: string, image: File | null) => {
+    async (prompt: string) => {
       const userMessage: ChatMessage = {
         id: newId(),
         role: 'user',
         content: prompt,
-        imageUrl: image ? URL.createObjectURL(image) : undefined,
       }
       const placeholderId = newId()
       setMessages((prev) => [
@@ -132,9 +131,8 @@ export default function App() {
       streamRef.current = controller
 
       try {
-        const result = await streamMultimodalQuery(
+        const result = await streamRagQuery(
           prompt,
-          image,
           {
             onToken: (text) =>
               setMessages((prev) =>
