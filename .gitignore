@@ -16,3 +16,4 @@ triage.stdout.log
 .claude
 /frontend/node_modules
 /frontend/.env.example
+/chroma_db

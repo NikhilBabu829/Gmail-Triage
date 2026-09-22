@@ -30,6 +30,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from rag import query_rag
+
 app = FastAPI()
 
 load_dotenv()
@@ -466,10 +468,10 @@ def get_summary():
     results = generate_summary(summary)
     return results
 
-@app.post("api/rag/multimodal-query")
-def rag():
+@app.post("/api/rag/multimodal-query")
+def rag(query: str):
     return StreamingResponse(
-        query_rag(query=prompt),
+        query_rag(query=query.prompt),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

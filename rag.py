@@ -5,7 +5,7 @@ import json
 
 from anthropic import Anthropic
 
-embedding_function = SentenceTransformer("BAAI/bge-base-en-v1.5")
+embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction("BAAI/bge-base-en-v1.5")
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
@@ -52,6 +52,7 @@ def index_emails():
     return len(ids)
 
 def query_rag(query: str, n_results: int = 4):
+    index_emails()
     results = collection.query(
         query_texts=[query],
         n_results=n_results
