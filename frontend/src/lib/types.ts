@@ -21,8 +21,6 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   /** Raw text for user messages, markdown for assistant messages. */
   content: string
-  /** Object URL of an attached image, user messages only. */
-  imageUrl?: string
   sources?: TriagedEmail[]
   /** Waiting on the first token. */
   pending?: boolean

@@ -124,15 +124,14 @@ export interface StreamHandlers {
  *
  * Returns the fully assembled answer and any sources that arrived.
  */
-export async function streamMultimodalQuery(
+export async function streamRagQuery(
   prompt: string,
-  image: File | null | undefined,
   { onToken, onSources }: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<RagResponse> {
+  // Still multipart, so the backend reads `prompt` with Form(...).
   const form = new FormData()
   form.append('prompt', prompt)
-  if (image) form.append('image', image, image.name)
 
   let res: Response
   try {

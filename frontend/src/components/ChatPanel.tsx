@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ImagePlus, Mic, Paperclip, SendHorizontal, Sparkles, Square, X } from 'lucide-react'
+import { useCallback, useEffect, useRef } from 'react'
+import { Mic, SendHorizontal, Sparkles, Square } from 'lucide-react'
 import { ChatMessageBubble } from './ChatMessageBubble'
 import { Button } from './ui'
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition'
-import { cn, isAcceptedImage } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/lib/types'
 
 export interface ChatPanelHandle {
@@ -17,7 +17,7 @@ interface Props {
   input: string
   /** A state setter, so voice transcripts can append to whatever is already typed. */
   onInputChange: React.Dispatch<React.SetStateAction<string>>
-  onSend: (prompt: string, image: File | null) => void
+  onSend: (prompt: string) => void
   /** Aborts an in-flight answer stream. */
   onStop: () => void
   onError: (message: string) => void
@@ -47,14 +47,8 @@ export function ChatPanel({
   onToggleSpeech,
   registerHandle,
 }: Props) {
-  /** The file and its object URL move together so the preview never outlives its blob. */
-  const [attachment, setAttachment] = useState<{ file: File; url: string } | null>(null)
-  const [dragging, setDragging] = useState(false)
-
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const streamRef = useRef<HTMLDivElement>(null)
-  const dragDepth = useRef(0)
   const stickToBottom = useRef(true)
 
   const appendTranscript = useCallback(
@@ -107,36 +101,11 @@ export function ChatPanel({
     stickToBottom.current = distance < 48
   }
 
-  const clearAttachment = useCallback(() => {
-    setAttachment((current) => {
-      if (current) URL.revokeObjectURL(current.url)
-      return null
-    })
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }, [])
-
-  const acceptImage = useCallback(
-    (file: File | undefined | null) => {
-      if (!file) return
-      if (!isAcceptedImage(file)) {
-        onError('Unsupported file type. Attach a PNG, JPG or WebP image.')
-        return
-      }
-      setAttachment((current) => {
-        if (current) URL.revokeObjectURL(current.url)
-        return { file, url: URL.createObjectURL(file) }
-      })
-    },
-    [onError],
-  )
-
   const submit = () => {
     const prompt = input.trim()
     if (!prompt || sending) return
-    // The sent message creates its own object URL, so this preview's can be released.
-    onSend(prompt, attachment?.file ?? null)
+    onSend(prompt)
     onInputChange('')
-    clearAttachment()
   }
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -146,48 +115,11 @@ export function ChatPanel({
     }
   }
 
-  const onPaste = (event: React.ClipboardEvent) => {
-    const file = Array.from(event.clipboardData.files).find(isAcceptedImage)
-    if (file) {
-      event.preventDefault()
-      acceptImage(file)
-    }
-  }
-
-  // dragenter/dragleave fire for every child element, so track depth rather than a boolean.
-  const onDragEnter = (event: React.DragEvent) => {
-    if (!Array.from(event.dataTransfer.types).includes('Files')) return
-    dragDepth.current++
-    setDragging(true)
-  }
-  const onDragLeave = () => {
-    dragDepth.current = Math.max(0, dragDepth.current - 1)
-    if (dragDepth.current === 0) setDragging(false)
-  }
-  const onDrop = (event: React.DragEvent) => {
-    event.preventDefault()
-    dragDepth.current = 0
-    setDragging(false)
-    acceptImage(Array.from(event.dataTransfer.files)[0])
-  }
-
   return (
     <section
       className="relative flex h-full min-h-0 flex-col border-line md:border-l"
-      aria-label="Multimodal RAG assistant"
-      onDragEnter={onDragEnter}
-      onDragOver={(event) => event.preventDefault()}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      aria-label="Inbox assistant"
     >
-      {dragging && (
-        <div className="pointer-events-none absolute inset-3 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-accent bg-bg/85">
-          <ImagePlus className="size-6 text-accent" />
-          <p className="text-sm font-medium">Drop an image to attach it</p>
-          <p className="text-xs text-muted">PNG, JPG or WebP</p>
-        </div>
-      )}
-
       <div
         ref={streamRef}
         onScroll={onStreamScroll}
@@ -201,7 +133,7 @@ export function ChatPanel({
             <div>
               <p className="text-sm font-medium">Ask about your inbox</p>
               <p className="mx-auto mt-1 max-w-xs text-xs text-muted">
-                Question your triaged email, attach a screenshot, or dictate with the mic.
+                Question your triaged email by typing, or dictate with the mic.
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-1.5">
@@ -234,30 +166,6 @@ export function ChatPanel({
       </div>
 
       <div className="shrink-0 border-t border-line bg-panel/40 px-4 py-3 md:px-5">
-        {attachment && (
-          <div className="mb-2 inline-flex items-start gap-2 rounded-lg border border-line bg-panel p-1.5">
-            <img
-              src={attachment.url}
-              alt={`Attachment preview: ${attachment.file.name}`}
-              className="size-14 rounded object-cover"
-            />
-            <div className="min-w-0 max-w-40 pt-0.5">
-              <p className="truncate text-xs font-medium">{attachment.file.name}</p>
-              <p className="text-[11px] text-muted">
-                {(attachment.file.size / 1024).toFixed(0)} KB
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={clearAttachment}
-              aria-label="Remove attached image"
-              className="rounded p-0.5 text-muted transition-colors hover:text-ink"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        )}
-
         {listening && (
           <div className="mb-2 flex items-center gap-2 text-[11px] text-red-300">
             <span className="animate-rec size-2 rounded-full bg-red-500" aria-hidden="true" />
@@ -267,30 +175,18 @@ export function ChatPanel({
         )}
 
         <div className="flex items-end gap-1.5 rounded-xl border border-line bg-panel px-1.5 py-1.5 focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/20">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className="hidden"
-            onChange={(event) => acceptImage(event.target.files?.[0])}
-          />
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => fileInputRef.current?.click()}
-            title="Attach an image"
-            aria-label="Attach an image"
-          >
-            <Paperclip className="size-4" />
-          </Button>
-
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleMic}
             disabled={!sttSupported}
-            title={sttSupported ? (listening ? 'Stop recording' : 'Dictate a question') : 'Voice input is not supported in this browser'}
+            title={
+              sttSupported
+                ? listening
+                  ? 'Stop recording'
+                  : 'Dictate a question'
+                : 'Voice input is not supported in this browser'
+            }
             aria-label={listening ? 'Stop recording' : 'Start voice input'}
             aria-pressed={listening}
             className={cn(listening && 'animate-rec bg-red-500/20 text-red-300')}
@@ -304,7 +200,6 @@ export function ChatPanel({
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
             onKeyDown={onKeyDown}
-            onPaste={onPaste}
             placeholder="Ask about your inbox…"
             aria-label="Message the assistant"
             className="max-h-42 min-h-9 flex-1 resize-none bg-transparent py-1.5 text-sm leading-relaxed text-ink outline-none placeholder:text-muted"
