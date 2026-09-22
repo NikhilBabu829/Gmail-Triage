@@ -26,9 +26,10 @@ from googleapiclient.errors import HttpError
 
 from pydantic import BaseModel
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from typing import Optional
 
 from rag import query_rag
 
@@ -469,9 +470,12 @@ def get_summary():
     return results
 
 @app.post("/api/rag/multimodal-query")
-def rag(query: str):
+def rag(
+    prompt: str = Form(...),
+    image: Optional[UploadFile] = File(None)
+    ):
     return StreamingResponse(
-        query_rag(query=query.prompt),
+        query_rag(query=prompt),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
