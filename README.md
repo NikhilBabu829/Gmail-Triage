@@ -258,7 +258,3 @@ Email content is sent to the Anthropic API for labeling, summarization, and ques
 - [ ] Local inference with open-weights models (such as Qwen 3) for full privacy and zero API cost
 
 ---
-
-## 📄 License
-
-MIT
