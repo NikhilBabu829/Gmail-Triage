@@ -387,16 +387,16 @@ def agent(service, max_safety_turns=10):
 if __name__ == "__main__":
     service = build("gmail", "v1", credentials=get_credentials())
     # send_mail(service, "nikhilbabu829@gmail.com", "Hello", "sent using the api")
-    messages = list_messages(service)
-    print(messages)
+    # messages = list_messages(service)
+    # print(messages)
     # with open("short.json", "r") as f:
     #     short_messages = json.load(f)
-    # with open("long_content.json", "r") as f:
-    #         full_content = json.load(f)
-    user_labels = labels(service=service)
-    # with open("custom_lables.json", "r") as f:
-    #     custom_labels = json.load(f)
-    results = attach_labels(user_labels, messages, service)
+    with open("long_content.json", "r") as f:
+            full_content = json.load(f)
+    # user_labels = labels(service=service)
+    with open("custom_lables.json", "r") as f:
+        custom_labels = json.load(f)
+    results = attach_labels(custom_labels, full_content, service)
     # response = generate_summary(full_content)
     # answer = agent(service)
     # print(answer)

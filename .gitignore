@@ -17,3 +17,5 @@ triage.stdout.log
 /frontend/node_modules
 /frontend/.env.example
 /chroma_db
+**__pycache__/
+
